@@ -1,0 +1,15 @@
+RewriteEngine On
+RewriteBase /billing_hospital/
+
+RewriteCond %{THE_REQUEST} \s/+[^\s?]*/index\.php\? [NC]
+RewriteCond %{QUERY_STRING} (^|&)page=([a-z0-9-]+)(&|$) [NC]
+RewriteCond %{QUERY_STRING} !(^|&)partial=1(&|$) [NC]
+RewriteRule ^index\.php$ %2.html [R=302,L,NE]
+
+RewriteCond %{THE_REQUEST} \s/+[^\s?]*/patient-statement\.php[?\s] [NC]
+RewriteRule ^patient-statement\.php$ patient-statement.html [R=302,L,NE]
+
+RewriteRule ^patient-statement\.html$ patient-statement.php [QSA,L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^([a-z0-9-]+)\.html$ index.php?page=$1 [QSA,L,NC]
