@@ -112,7 +112,7 @@ $readyForDischarge = $controller->getReadyForDischarge();
 
 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
     <div class="bg-white rounded-xl border border-slate-200 p-5">
-        <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Active Admissions</p>
+        <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Active Patients</p>
         <p class="mt-2 text-2xl font-bold text-slate-900"><?= $stats['active_admissions'] ?></p>
     </div>
     <div class="bg-white rounded-xl border border-slate-200 p-5">
@@ -169,6 +169,19 @@ $readyForDischarge = $controller->getReadyForDischarge();
         </div>
     </a>
 
+    <a href="<?= BASE_URL ?>/index.php?page=nurse-emergency-create"
+       class="flex items-center gap-4 bg-white rounded-xl border border-slate-200 p-5 hover:border-rose-300 hover:shadow-sm transition">
+        <div class="w-12 h-12 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+            </svg>
+        </div>
+        <div class="min-w-0">
+            <p class="font-semibold text-slate-900 truncate">Emergency Patient</p>
+            <p class="text-xs text-slate-500 truncate">Create an ER visit</p>
+        </div>
+    </a>
+
     <a href="<?= BASE_URL ?>/index.php?page=nurse-room-board"
        class="flex items-center gap-4 bg-white rounded-xl border border-slate-200 p-5 hover:border-violet-300 hover:shadow-sm transition">
         <div class="w-12 h-12 rounded-lg bg-violet-50 text-violet-600 flex items-center justify-center shrink-0">
@@ -185,7 +198,7 @@ $readyForDischarge = $controller->getReadyForDischarge();
 
 <div class="bg-white rounded-xl border border-slate-200 overflow-hidden mb-8">
     <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
-        <h3 class="text-lg font-semibold text-slate-900">Active Admissions</h3>
+        <h3 class="text-lg font-semibold text-slate-900">Active Patients</h3>
         <a href="<?= BASE_URL ?>/index.php?page=nurse-admissions" class="text-sm font-medium text-blue-600 hover:text-blue-700">View all →</a>
     </div>
     <div class="overflow-x-auto">

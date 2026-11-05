@@ -193,6 +193,19 @@ let statementRows = [];
 let options = {};
 let activeStatement = null;
 let statementFilterRows = [];
+let statementRefreshInProgress = false;
+
+window.setInterval(async () => {
+    const manageModal = document.getElementById('manageModal');
+    if (page !== 'statements' || !activeStatement || !manageModal
+        || manageModal.classList.contains('hidden') || statementRefreshInProgress) return;
+    statementRefreshInProgress = true;
+    try {
+        await openStatement(statementId(activeStatement));
+    } finally {
+        statementRefreshInProgress = false;
+    }
+}, 60_000);
 
 async function loadStatementsPage() {
     const [listData, optionData] = await Promise.all([request('list'), request('options')]);

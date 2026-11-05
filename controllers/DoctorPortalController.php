@@ -7,11 +7,33 @@ class DoctorPortalController
 {
     private PDO $pdo;
     private int $doctorId;
+    private ?string $careScope = null;
 
     public function __construct(PDO $pdo, int $doctorId)
     {
         $this->pdo = $pdo;
         $this->doctorId = $doctorId;
+    }
+
+    public function getCareScope(): string
+    {
+        if ($this->careScope === null) {
+            $stmt = $this->pdo->prepare('SELECT care_scope FROM `doctor` WHERE doctor_id = ? LIMIT 1');
+            $stmt->execute([$this->doctorId]);
+            $scope = $stmt->fetchColumn();
+            if (!in_array($scope, ['ER', 'INPATIENT'], true)) {
+                throw new RuntimeException('Doctor care scope is not configured.');
+            }
+            $this->careScope = $scope;
+        }
+        return $this->careScope;
+    }
+
+    private function requireInpatientDoctor(): void
+    {
+        if ($this->getCareScope() === 'ER') {
+            $this->json(403, ['success' => false, 'message' => 'This feature is only available to Admission Doctors.']);
+        }
     }
 
     private function statusId(string $name): int
@@ -24,7 +46,7 @@ class DoctorPortalController
     private function activeStatusIds(): array
     {
         $ids = [];
-        foreach (['Admitted', 'Transferred', 'Ready for Discharge'] as $n) {
+        foreach (['Emergency', 'Admitted', 'Transferred', 'Ready for Discharge'] as $n) {
             $id = $this->statusId($n);
             if ($id > 0) $ids[] = $id;
         }
@@ -63,12 +85,15 @@ class DoctorPortalController
         $stmt->execute(array_merge([$this->doctorId], $activeIds));
         $assignedAdmissions = (int)$stmt->fetchColumn();
 
-        $stmt = $this->pdo->prepare(
-            'SELECT COUNT(*) FROM `consultation`
-             WHERE doctor_id = ? AND DATE(consultation_datetime) = CURDATE()'
-        );
-        $stmt->execute([$this->doctorId]);
-        $todayConsultations = (int)$stmt->fetchColumn();
+        $todayConsultations = 0;
+        if ($this->getCareScope() === 'INPATIENT') {
+            $stmt = $this->pdo->prepare(
+                'SELECT COUNT(*) FROM `consultation`
+                 WHERE doctor_id = ? AND DATE(consultation_datetime) = CURDATE()'
+            );
+            $stmt->execute([$this->doctorId]);
+            $todayConsultations = (int)$stmt->fetchColumn();
+        }
 
         $pendingRequests = 0;
         if ($this->hasServiceRequestItemTable()) {
@@ -87,16 +112,19 @@ class DoctorPortalController
             $pendingRequests = (int)$stmt->fetchColumn();
         }
 
-        $readyId = $this->readyStatusId();
-        $stmt = $this->pdo->prepare(
-            'SELECT COUNT(DISTINCT ad.admission_id)
-             FROM `admission_doctor` ad
-             INNER JOIN `admission` a ON a.admission_id = ad.admission_id
-             WHERE ad.doctor_id = ? AND ad.ended_datetime IS NULL
-               AND a.status_id = ?'
-        );
-        $stmt->execute([$this->doctorId, $readyId]);
-        $readyForDischarge = (int)$stmt->fetchColumn();
+        $readyForDischarge = 0;
+        if ($this->getCareScope() === 'INPATIENT') {
+            $readyId = $this->readyStatusId();
+            $stmt = $this->pdo->prepare(
+                'SELECT COUNT(DISTINCT ad.admission_id)
+                 FROM `admission_doctor` ad
+                 INNER JOIN `admission` a ON a.admission_id = ad.admission_id
+                 WHERE ad.doctor_id = ? AND ad.ended_datetime IS NULL
+                   AND a.status_id = ?'
+            );
+            $stmt->execute([$this->doctorId, $readyId]);
+            $readyForDischarge = (int)$stmt->fetchColumn();
+        }
 
         return [
             'assigned_admissions'  => $assignedAdmissions,
@@ -205,7 +233,7 @@ class DoctorPortalController
 
         $stmt = $this->pdo->prepare(
             'SELECT a.admission_id, a.admission_datetime, a.discharge_datetime,
-                    a.chief_complaint, a.admission_type, a.notes, a.total_room_transfers,
+                    a.chief_complaint, a.admission_type, a.care_scope, a.notes, a.total_room_transfers,
                     p.patient_id, p.first_name, p.last_name, p.birth_date,
                     p.contact_number, p.email, p.address, p.medical_history,
                     g.gender_name,
@@ -250,8 +278,7 @@ class DoctorPortalController
         $admission['diagnoses'] = $stmt->fetchAll();
 
         if ($this->hasServiceRequestItemTable()) {
-            $stmt = $this->pdo->prepare(
-                'SELECT sr.request_id, sr.department_id, sr.doctor_id, sr.priority, sr.status, sr.request_datetime,
+            $sql = 'SELECT sr.request_id, sr.department_id, sr.doctor_id, sr.priority, sr.status, sr.request_datetime,
                         sr.completed_datetime, sr.cancelled_datetime, sr.instructions, sr.notes,
                         d.department_name,
                         COUNT(sri.request_item_id) AS item_count,
@@ -267,10 +294,15 @@ class DoctorPortalController
                 LEFT JOIN `department` d ON d.department_id = sr.department_id
                 LEFT JOIN `doctor` doc ON doc.doctor_id = sr.doctor_id
                 LEFT JOIN `user` u ON u.user_id = doc.user_id
-                WHERE sr.admission_id = ?
-                GROUP BY sr.request_id
-                ORDER BY sr.request_datetime DESC'
-            );
+                WHERE sr.admission_id = ?';
+            if ($admission['care_scope'] === 'ER') {
+                $sql .= ' AND (
+                            (d.department_code = "ER" AND cc.category_name = "Ancillary Services")
+                            OR (d.department_code = "PHARM" AND ci.tracks_patient_doses = 1)
+                          )';
+            }
+            $sql .= ' GROUP BY sr.request_id ORDER BY sr.request_datetime DESC';
+            $stmt = $this->pdo->prepare($sql);
             $stmt->execute([$admissionId]);
             $admission['service_requests'] = $stmt->fetchAll();
             foreach ($admission['service_requests'] as &$request) {
@@ -279,20 +311,26 @@ class DoctorPortalController
             }
             unset($request);
         } else {
-            $stmt = $this->pdo->prepare(
-                'SELECT sr.request_id, sr.charge_item_id, sr.request_datetime, sr.quantity,
+            $sql = 'SELECT sr.request_id, sr.charge_item_id, sr.request_datetime, sr.quantity,
                         sr.status, sr.doctor_id,
                         ci.item_code, ci.item_name, ci.default_price, ci.unit_of_measure,
-                        cc.category_name,
+                        cc.category_name, d.department_code,
                         u.first_name AS doctor_first, u.last_name AS doctor_last
                  FROM `service_request` sr
                  INNER JOIN `charge_item` ci ON ci.charge_item_id = sr.charge_item_id
                  INNER JOIN `charge_category` cc ON cc.category_id = ci.category_id
+                 INNER JOIN `department` d ON d.department_id = sr.department_id
                  LEFT JOIN `doctor` doc ON doc.doctor_id = sr.doctor_id
                  LEFT JOIN `user` u ON u.user_id = doc.user_id
-                 WHERE sr.admission_id = ?
-                 ORDER BY sr.request_datetime DESC'
-            );
+                 WHERE sr.admission_id = ?';
+            if ($admission['care_scope'] === 'ER') {
+                $sql .= ' AND (
+                            (d.department_code = "ER" AND cc.category_name = "Ancillary Services")
+                            OR (d.department_code = "PHARM" AND ci.tracks_patient_doses = 1)
+                          )';
+            }
+            $sql .= ' ORDER BY sr.request_datetime DESC';
+            $stmt = $this->pdo->prepare($sql);
             $stmt->execute([$admissionId]);
             $admission['service_requests'] = $stmt->fetchAll();
             foreach ($admission['service_requests'] as &$request) {
@@ -302,25 +340,60 @@ class DoctorPortalController
             unset($request);
         }
 
-        $stmt = $this->pdo->prepare(
-            'SELECT c.consultation_id, c.consultation_datetime, c.purpose, c.status, c.notes
-             FROM `consultation` c
-             WHERE c.patient_id = ?
-             ORDER BY c.consultation_datetime DESC
-             LIMIT 10'
-        );
-        $stmt->execute([$admission['patient_id']]);
-        $admission['consultations'] = $stmt->fetchAll();
+        $admission['medicine_return_items'] = $admission['care_scope'] === 'ER'
+            ? $this->getMedicineReturnItems($admissionId)
+            : [];
+
+        $admission['consultations'] = [];
+        if ($admission['care_scope'] === 'INPATIENT') {
+            $stmt = $this->pdo->prepare(
+                'SELECT c.consultation_id, c.consultation_datetime, c.purpose, c.status, c.notes
+                 FROM `consultation` c
+                 WHERE c.patient_id = ?
+                 ORDER BY c.consultation_datetime DESC
+                 LIMIT 10'
+            );
+            $stmt->execute([$admission['patient_id']]);
+            $admission['consultations'] = $stmt->fetchAll();
+        }
 
         return $admission;
     }
 
     public function requestMedicineReturn(array $data): array
     {
-        throw new RuntimeException(
-            'Choose unused medicine quantities while confirming discharge readiness.',
-            409
-        );
+        if ($this->getCareScope() !== 'ER') {
+            throw new RuntimeException(
+                'Choose unused medicine quantities while confirming discharge readiness.',
+                409
+            );
+        }
+
+        $fulfillmentItemId = (int)($data['fulfillment_item_id'] ?? 0);
+        $quantity = filter_var($data['quantity'] ?? null, FILTER_VALIDATE_INT);
+        $reason = trim((string)($data['reason'] ?? 'Unused emergency medicine'));
+        $admissionId = (int)($data['admission_id'] ?? 0);
+        if ($fulfillmentItemId <= 0 || $quantity === false || $quantity <= 0 || $admissionId <= 0) {
+            throw new RuntimeException('Select a valid medicine return quantity.', 422);
+        }
+
+        try {
+            $this->pdo->beginTransaction();
+            $result = $this->createMedicineReturnRequest(
+                $fulfillmentItemId,
+                $quantity,
+                $reason,
+                $admissionId
+            );
+            $this->pdo->commit();
+            return array_merge($result, [
+                'success' => true,
+                'message' => 'Medicine return request sent to Pharmacy.',
+            ]);
+        } catch (Throwable $e) {
+            if ($this->pdo->inTransaction()) $this->pdo->rollBack();
+            throw $e;
+        }
     }
 
     private function createMedicineReturnRequest(
@@ -337,7 +410,7 @@ class DoctorPortalController
                         FROM `service_fulfillment_receipt_item` receipt
                         WHERE receipt.fulfillment_item_id = sfi.fulfillment_item_id
                     ), 0) AS quantity_received,
-                    sr.admission_id, sr.department_id, ast.status_name
+                    sr.admission_id, sr.department_id, ast.status_name, a.care_scope
              FROM `service_fulfillment_item` sfi
              INNER JOIN `service_fulfillment` sf ON sf.fulfillment_id = sfi.fulfillment_id
              INNER JOIN `service_request_item` sri ON sri.request_item_id = sfi.request_item_id
@@ -355,10 +428,14 @@ class DoctorPortalController
         );
         $stmt->execute([$fulfillmentItemId, $this->doctorId]);
         $item = $stmt->fetch();
+        $allowedStatuses = $item && $item['care_scope'] === 'ER'
+            ? ['Emergency', 'Admitted', 'Transferred']
+            : ['Admitted', 'Transferred', 'Ready for Discharge'];
         if (!$item
             || ($expectedAdmissionId !== null && (int)$item['admission_id'] !== $expectedAdmissionId)
-            || !in_array($item['status_name'], ['Admitted', 'Transferred', 'Ready for Discharge'], true)) {
-            throw new RuntimeException('A Pharmacy return can only be requested as part of discharge readiness.', 409);
+            || !in_array($item['status_name'], $allowedStatuses, true)
+            || ($this->getCareScope() === 'ER' && $item['care_scope'] !== 'ER')) {
+            throw new RuntimeException('A Pharmacy return is not available for this patient or medicine item.', 409);
         }
 
         $requestMarker = 'MED_RETURN:' . $fulfillmentItemId . '|%';
@@ -501,40 +578,74 @@ class DoctorPortalController
 
     public function getChargeItems(): array
     {
-        return $this->pdo->query(
-            'SELECT ci.charge_item_id, ci.item_code, ci.item_name, ci.default_price,
+        $sql = 'SELECT ci.charge_item_id, ci.item_code, ci.item_name, ci.default_price,
                     ci.is_taxable, ci.unit_of_measure, ci.requires_doctor_order,
                     cc.category_id, cc.category_name
              FROM `charge_item` ci
              INNER JOIN `charge_category` cc ON cc.category_id = ci.category_id
-             WHERE ci.is_active = 1
-             ORDER BY cc.category_name, ci.item_name'
-        )->fetchAll();
+             WHERE ci.is_active = 1';
+        if ($this->getCareScope() === 'ER') {
+            $sql .= ' AND (
+                        (cc.category_name = "Ancillary Services" AND ci.tracks_patient_doses = 0
+                         AND EXISTS (
+                             SELECT 1 FROM `department` d
+                             WHERE d.department_code = "ER"
+                               AND d.charge_category_id = cc.category_id AND d.is_active = 1
+                         ))
+                        OR (ci.tracks_patient_doses = 1 AND EXISTS (
+                             SELECT 1 FROM `department` d
+                             WHERE d.department_code = "PHARM" AND d.is_active = 1
+                         ))
+                      )';
+        }
+        $sql .= ' ORDER BY cc.category_name, ci.item_name';
+        return $this->pdo->query($sql)->fetchAll();
     }
 
     public function getDepartmentsWithCategories(): array
     {
-        return $this->pdo->query(
-            'SELECT d.department_id, d.department_name, d.department_code,
+        $sql = 'SELECT d.department_id, d.department_name, d.department_code,
                     d.charge_category_id, cc.category_name AS charge_category_name
             FROM `department` d
             LEFT JOIN `charge_category` cc ON cc.category_id = d.charge_category_id
             WHERE d.is_active = 1
-            AND COALESCE(d.department_code, "") NOT IN ("ADMIN", "CASHIER", "NURSING")
-            ORDER BY d.department_name'
-        )->fetchAll();
+            AND COALESCE(d.department_code, "") NOT IN ("ADMIN", "CASHIER", "NURSING")';
+        if ($this->getCareScope() === 'ER') {
+            $sql .= ' AND (
+                        (d.department_code = "ER" AND cc.category_name = "Ancillary Services")
+                        OR d.department_code = "PHARM"
+                      )';
+        }
+        $sql .= ' ORDER BY d.department_name';
+        return $this->pdo->query($sql)->fetchAll();
     }
 
     public function getChargeItemsForDepartment(int $departmentId): array
     {
         $stmt = $this->pdo->prepare(
-            'SELECT d.department_id, d.charge_category_id
-            FROM `department` d WHERE d.department_id = ? LIMIT 1'
+            'SELECT d.department_id, d.department_code, d.charge_category_id,
+                    cc.category_name
+             FROM `department` d
+             LEFT JOIN `charge_category` cc ON cc.category_id = d.charge_category_id
+             WHERE d.department_id = ? AND d.is_active = 1 LIMIT 1'
         );
         $stmt->execute([$departmentId]);
         $dept = $stmt->fetch();
         if (!$dept || empty($dept['charge_category_id'])) return [];
+        $careScope = $this->getCareScope();
+        if ($careScope === 'ER') {
+            $isEmergencyAncillary = $dept['department_code'] === 'ER'
+                && $dept['category_name'] === 'Ancillary Services';
+            $isPharmacy = $dept['department_code'] === 'PHARM';
+            if (!$isEmergencyAncillary && !$isPharmacy) return [];
+        }
 
+        $itemScopeFilter = '';
+        if ($careScope === 'ER') {
+            $itemScopeFilter = $dept['department_code'] === 'PHARM'
+                ? ' AND ci.tracks_patient_doses = 1'
+                : ' AND ci.tracks_patient_doses = 0';
+        }
         $stmt = $this->pdo->prepare(
             'SELECT ci.charge_item_id, ci.item_code, ci.item_name, ci.default_price,
                     ci.unit_of_measure, ci.is_taxable,
@@ -542,6 +653,7 @@ class DoctorPortalController
             FROM `charge_item` ci
             INNER JOIN `charge_category` cc ON cc.category_id = ci.category_id
             WHERE ci.is_active = 1 AND ci.category_id = ?
+            ' . $itemScopeFilter . '
             ORDER BY ci.item_name'
         );
         $stmt->execute([(int)$dept['charge_category_id']]);
@@ -572,7 +684,7 @@ class DoctorPortalController
         }
 
         $stmt = $this->pdo->prepare(
-            'SELECT ad.admission_doctor_id, ast.status_name,
+            'SELECT ad.admission_doctor_id, ast.status_name, a.care_scope,
                     p.first_name, p.last_name
             FROM `admission_doctor` ad
             INNER JOIN `admission` a ON a.admission_id = ad.admission_id
@@ -586,18 +698,33 @@ class DoctorPortalController
         if (!$assignment) {
             $this->json(403, ['success' => false, 'message' => 'You are not assigned to this admission.']);
         }
-        if (!in_array($assignment['status_name'], ['Admitted', 'Transferred'], true)) {
+        if ($assignment['care_scope'] !== $this->getCareScope()) {
+            $this->json(403, ['success' => false, 'message' => 'You are not assigned to a patient within your care scope.']);
+        }
+        $allowedStatuses = $assignment['care_scope'] === 'ER'
+            ? ['Emergency', 'Admitted', 'Transferred']
+            : ['Admitted', 'Transferred'];
+        if (!in_array($assignment['status_name'], $allowedStatuses, true)) {
             $this->json(409, ['success' => false, 'message' => 'New service requests cannot be submitted after discharge readiness or discharge.']);
         }
 
         $departmentStmt = $this->pdo->prepare(
-            'SELECT department_id, charge_category_id, department_code
-             FROM `department` WHERE department_id = ? AND is_active = 1 LIMIT 1'
+            'SELECT d.department_id, d.charge_category_id, d.department_code, cc.category_name
+             FROM `department` d
+             LEFT JOIN `charge_category` cc ON cc.category_id = d.charge_category_id
+             WHERE d.department_id = ? AND d.is_active = 1 LIMIT 1'
         );
         $departmentStmt->execute([$departmentId]);
         $dept = $departmentStmt->fetch();
         if (!$dept) {
             $this->json(422, ['success' => false, 'message' => 'Please select an active department to fulfill the request.']);
+        }
+        $careScope = $this->getCareScope();
+        $isEmergencyAncillary = $dept['department_code'] === 'ER'
+            && $dept['category_name'] === 'Ancillary Services';
+        $isPharmacy = $dept['department_code'] === 'PHARM';
+        if ($careScope === 'ER' && !$isEmergencyAncillary && !$isPharmacy) {
+            $this->json(403, ['success' => false, 'message' => 'Emergency Doctors may request Emergency Department ancillary items or medicines from Pharmacy.']);
         }
 
         $items = $data['items'] ?? null;
@@ -637,6 +764,11 @@ class DoctorPortalController
             if ((int)$ci['tracks_patient_doses'] === 1 && $dept['department_code'] !== 'PHARM') {
                 $this->json(422, ['success' => false, 'message' => 'Medicine items must be requested from the Pharmacy department.']);
             }
+            if ($careScope === 'ER'
+                && (($isPharmacy && (int)$ci['tracks_patient_doses'] !== 1)
+                    || ($isEmergencyAncillary && (int)$ci['tracks_patient_doses'] === 1))) {
+                $this->json(422, ['success' => false, 'message' => 'Select a Pharmacy medicine or an Emergency Department ancillary item for the selected department.']);
+            }
 
             if ((int)$ci['tracks_patient_doses'] !== 1
                 && !empty($dept['charge_category_id'])
@@ -663,14 +795,21 @@ class DoctorPortalController
             $this->pdo->beginTransaction();
 
             $admissionLock = $this->pdo->prepare(
-                'SELECT ast.status_name
+                'SELECT ast.status_name, a.care_scope
                 FROM `admission` a
                 INNER JOIN `admission_status` ast ON ast.status_id = a.status_id
                 WHERE a.admission_id = ? FOR UPDATE'
             );
             $admissionLock->execute([$admissionId]);
-            $lockedStatus = $admissionLock->fetchColumn();
-            if (!in_array($lockedStatus, ['Admitted', 'Transferred'], true)) {
+            $lockedAdmission = $admissionLock->fetch();
+            if (!$lockedAdmission || $lockedAdmission['care_scope'] !== $this->getCareScope()) {
+                $this->pdo->rollBack();
+                $this->json(403, ['success' => false, 'message' => 'You are not assigned to a patient within your care scope.']);
+            }
+            $allowedStatuses = $lockedAdmission['care_scope'] === 'ER'
+                ? ['Emergency', 'Admitted', 'Transferred']
+                : ['Admitted', 'Transferred'];
+            if (!in_array($lockedAdmission['status_name'], $allowedStatuses, true)) {
                 $this->pdo->rollBack();
                 $this->json(409, ['success' => false, 'message' => 'New service requests cannot be submitted after discharge readiness or discharge.']);
             }
@@ -707,7 +846,6 @@ class DoctorPortalController
                 'patient_name' => trim($assignment['first_name'] . ' ' . $assignment['last_name']),
                 'department_id' => $departmentId,
             ], [1, 2, 5], $departmentId);
-
             $this->json(201, [
                 'success' => true,
                 'message' => 'Service request created successfully.',
@@ -737,9 +875,10 @@ class DoctorPortalController
         try {
             $this->pdo->beginTransaction();
             $stmt = $this->pdo->prepare(
-                'SELECT request_id, admission_id, department_id, status
+                'SELECT sr.request_id, sr.admission_id, sr.department_id, sr.status
                  FROM `service_request`
-                 WHERE request_id = ? AND doctor_id = ?
+                 sr
+                 WHERE sr.request_id = ? AND sr.doctor_id = ?
                  FOR UPDATE'
             );
             $stmt->execute([$requestId, $this->doctorId]);
@@ -780,6 +919,7 @@ class DoctorPortalController
 
     public function getReadyForDischarge(): array
     {
+        $this->requireInpatientDoctor();
         $activeIds = $this->activeStatusIds();
         $placeholders = implode(',', array_fill(0, count($activeIds), '?'));
 
@@ -819,6 +959,7 @@ class DoctorPortalController
 
     public function confirmDischarge(): void
     {
+        $this->requireInpatientDoctor();
         $data = $this->input();
         $admissionId = (int)($data['admission_id'] ?? 0);
 
@@ -1189,6 +1330,7 @@ class DoctorPortalController
 
     public function getConsultations(): array
     {
+        $this->requireInpatientDoctor();
         $stmt = $this->pdo->prepare(
             'SELECT c.consultation_id, c.patient_id, c.consultation_datetime,
                     c.purpose, c.status, c.notes, c.created_at,
@@ -1204,6 +1346,7 @@ class DoctorPortalController
 
     public function createConsultation(): void
     {
+        $this->requireInpatientDoctor();
         $data = $this->input();
         $patientId = (int)($data['patient_id'] ?? 0);
         $datetime = $data['consultation_datetime'] ?? date('Y-m-d H:i:s');
@@ -1308,6 +1451,7 @@ class DoctorPortalController
 
     public function updateConsultationStatus(): void
     {
+        $this->requireInpatientDoctor();
         $id = (int)($_GET['id'] ?? 0);
         $status = $_GET['status'] ?? '';
 

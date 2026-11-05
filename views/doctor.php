@@ -14,9 +14,12 @@ if (!$doctorId) {
 }
 
 $controller = new DoctorPortalController($pdo, $doctorId);
+$doctorCareScope = $controller->getCareScope();
 $stats = $controller->getDashboardStats();
 $patients = $controller->getAssignedPatients();
-$readyForDischarge = $controller->getReadyForDischarge();
+$readyForDischarge = $doctorCareScope === 'INPATIENT'
+    ? $controller->getReadyForDischarge()
+    : [];
 $awaitingDischargeConfirmation = array_values(array_filter(
     $readyForDischarge,
     static fn(array $patient): bool => strcasecmp(
@@ -96,23 +99,27 @@ $awaitingDischargeConfirmation = array_values(array_filter(
     </div>
 <?php endif; ?>
 
-<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+<div class="grid grid-cols-1 sm:grid-cols-2 <?= $doctorCareScope === 'ER' ? 'lg:grid-cols-2' : 'lg:grid-cols-4' ?> gap-4 mb-8">
     <div class="bg-white rounded-xl border border-slate-200 p-5">
         <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Assigned Admissions</p>
         <p class="mt-2 text-2xl font-bold text-slate-900"><?= $stats['assigned_admissions'] ?></p>
     </div>
-    <div class="bg-white rounded-xl border border-slate-200 p-5">
-        <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Today's Consultations</p>
-        <p class="mt-2 text-2xl font-bold text-blue-600"><?= $stats['today_consultations'] ?></p>
-    </div>
+    <?php if ($doctorCareScope !== 'ER'): ?>
+        <div class="bg-white rounded-xl border border-slate-200 p-5">
+            <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Today's Consultations</p>
+            <p class="mt-2 text-2xl font-bold text-blue-600"><?= $stats['today_consultations'] ?></p>
+        </div>
+    <?php endif; ?>
     <div class="bg-white rounded-xl border border-slate-200 p-5">
         <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Pending Requests</p>
         <p class="mt-2 text-2xl font-bold text-amber-600"><?= $stats['pending_requests'] ?></p>
     </div>
-    <div class="bg-white rounded-xl border border-slate-200 p-5">
-        <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Ready for Discharge</p>
-        <p class="mt-2 text-2xl font-bold text-emerald-600"><?= $stats['ready_for_discharge'] ?></p>
-    </div>
+    <?php if ($doctorCareScope !== 'ER'): ?>
+        <div class="bg-white rounded-xl border border-slate-200 p-5">
+            <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Ready for Discharge</p>
+            <p class="mt-2 text-2xl font-bold text-emerald-600"><?= $stats['ready_for_discharge'] ?></p>
+        </div>
+    <?php endif; ?>
 </div>
 
 <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">

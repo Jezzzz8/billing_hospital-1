@@ -228,7 +228,7 @@ class NurseController
                AND d.department_code = "PHARM"
                AND ci.tracks_patient_doses = 1
                AND (sr.notes IS NULL OR sr.notes NOT LIKE "MED_RETURN:%")
-               AND ast.status_name IN ("Admitted", "Transferred", "Ready for Discharge")
+               AND ast.status_name IN ("Emergency", "Admitted", "Transferred", "Ready for Discharge")
                AND COALESCE(receipts.quantity_received, 0) > 0
              ORDER BY p.last_name, p.first_name, sr.admission_id, ci.item_name'
         );
@@ -559,7 +559,7 @@ class NurseController
 
     private function assertMedicineIntakeEditable(array $item): void
     {
-        if (!in_array($item['admission_status'], ['Admitted', 'Transferred'], true)) {
+        if (!in_array($item['admission_status'], ['Emergency', 'Admitted', 'Transferred'], true)) {
             throw new RuntimeException('Medicine intake can no longer be changed after discharge readiness.', 409);
         }
     }
@@ -589,7 +589,7 @@ class NurseController
     private function activeStatusIds(): array
     {
         $ids = [];
-        foreach (['Admitted', 'Transferred', 'Ready for Discharge'] as $n) {
+        foreach (['Emergency', 'Admitted', 'Transferred', 'Ready for Discharge'] as $n) {
             $id = $this->statusId($n);
             if ($id > 0) $ids[] = $id;
         }
@@ -686,34 +686,50 @@ class NurseController
         )->fetchAll();
     }
 
-    public function searchPatients(string $query): array
+    public function searchPatients(string $query, ?string $currentCareScope = null): array
     {
         $activeIds = $this->activeStatusIds();
         $placeholders = implode(',', array_fill(0, count($activeIds), '?'));
 
+        $admissionScopeFilter = $currentCareScope === 'ER'
+            ? ' AND a.care_scope = "ER"'
+            : '';
+        $activeAdmissionRequired = $currentCareScope === 'ER'
+            ? ' AND a.admission_id IS NOT NULL'
+            : ($currentCareScope === 'INPATIENT'
+                ? ' AND (a.admission_id IS NULL OR a.care_scope = "ER")'
+                : '');
         $sql = "SELECT p.patient_id, p.first_name, p.last_name, p.birth_date,
                        p.contact_number, p.email, p.address,
                        g.gender_name,
-                       a.admission_id, a.admission_datetime,
-                       ast.status_name AS admission_status_name, ast.color_code AS admission_status_color
+                       a.admission_id, a.admission_datetime, a.care_scope,
+                       ast.status_name AS admission_status_name, ast.color_code AS admission_status_color,
+                       r.room_id, r.room_number, rt.room_type_name
                 FROM `patient` p
                 INNER JOIN `gender` g ON g.gender_id = p.gender_id
-                LEFT JOIN `admission` a ON a.patient_id = p.patient_id AND a.status_id IN ($placeholders)
+                LEFT JOIN `admission` a ON a.patient_id = p.patient_id
+                    AND a.status_id IN ($placeholders)$admissionScopeFilter
                 LEFT JOIN `admission_status` ast ON ast.status_id = a.status_id
+                LEFT JOIN `room_assignment` ra ON ra.admission_id = a.admission_id
+                    AND ra.is_active = 1 AND ra.end_datetime IS NULL
+                LEFT JOIN `room` r ON r.room_id = ra.room_id
+                LEFT JOIN `room_type` rt ON rt.room_type_id = r.room_type_id
                 WHERE p.is_active = 1
-                  AND (p.first_name LIKE ? OR p.last_name LIKE ? OR p.contact_number LIKE ? OR p.email LIKE ?)
+                  $activeAdmissionRequired
+                  AND (p.first_name LIKE ? OR p.last_name LIKE ? OR p.contact_number LIKE ?
+                       OR p.email LIKE ? OR p.patient_code LIKE ?)
                 ORDER BY p.last_name, p.first_name
                 LIMIT 50";
 
         $like = '%' . $query . '%';
-        $params = array_merge($activeIds, [$like, $like, $like, $like]);
+        $params = array_merge($activeIds, [$like, $like, $like, $like, $like]);
 
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function getPatientDetails(int $patientId): ?array
+    public function getPatientDetails(int $patientId, ?string $currentCareScope = null): ?array
     {
         $stmt = $this->pdo->prepare(
             'SELECT p.*, g.gender_name
@@ -728,11 +744,14 @@ class NurseController
         $activeIds = $this->activeStatusIds();
         $placeholders = implode(',', array_fill(0, count($activeIds), '?'));
 
+        $admissionScopeFilter = $currentCareScope === 'ER'
+            ? ' AND a.care_scope = "ER"'
+            : '';
         $stmt = $this->pdo->prepare(
             "SELECT a.*, ast.status_name, ast.color_code
              FROM `admission` a
              INNER JOIN `admission_status` ast ON ast.status_id = a.status_id
-             WHERE a.patient_id = ? AND a.status_id IN ($placeholders)
+             WHERE a.patient_id = ? AND a.status_id IN ($placeholders)$admissionScopeFilter
              ORDER BY a.admission_datetime DESC, a.admission_id DESC LIMIT 1"
         );
         $stmt->execute(array_merge([$patientId], $activeIds));
@@ -745,7 +764,7 @@ class NurseController
     {
         $stmt = $this->pdo->prepare(
             'SELECT a.admission_id, a.status_id, a.admission_datetime, a.discharge_datetime, a.chief_complaint,
-                    a.admission_type, a.notes, a.total_room_transfers,
+                    a.admission_type, a.care_scope, a.notes, a.total_room_transfers,
                     p.patient_id, p.first_name, p.last_name, p.birth_date, p.patient_code,
                     p.contact_number, p.email, p.address,
                     g.gender_name,
@@ -767,6 +786,7 @@ class NurseController
         if ($errors) $this->json(422, ['success' => false, 'message' => 'Please fix the highlighted fields.', 'errors' => $errors]);
 
         try {
+            $this->pdo->beginTransaction();
             $stmt = $this->pdo->prepare(
                 'INSERT INTO `patient`
                     (gender_id, first_name, last_name, birth_date, senior_id_type, senior_id_number,
@@ -791,6 +811,8 @@ class NurseController
 
             $patientId = (int)$this->pdo->lastInsertId();
 
+            $this->pdo->commit();
+
             ws_broadcast('patient.created', [
                 'patient_id' => $patientId,
                 'patient_name' => trim($data['first_name'] . ' ' . $data['last_name']),
@@ -802,14 +824,25 @@ class NurseController
                 'patient_id' => $patientId,
             ]);
         } catch (Throwable $e) {
+            if ($this->pdo->inTransaction()) $this->pdo->rollBack();
             error_log('[NurseController::registerPatient] ' . $e->getMessage());
-            $this->json(500, ['success' => false, 'message' => 'Could not register patient.']);
+            $status = (int)$e->getCode() === 409 ? 409 : 500;
+            $this->json($status, [
+                'success' => false,
+                'message' => $status === 409 ? $e->getMessage() : 'Could not register patient.',
+            ]);
         }
     }
 
-    public function createAdmission(): void
+    public function createAdmission(string $careScope = 'INPATIENT'): void
     {
         $data = $this->input();
+        if (!in_array($careScope, ['ER', 'INPATIENT'], true)) {
+            $this->json(400, ['success' => false, 'message' => 'Invalid patient care scope.']);
+        }
+        if ($careScope === 'ER') {
+            $data['admission_type'] = 'Urgent';
+        }
         $errors = $this->validateAdmission($data);
         if ($errors) $this->json(422, ['success' => false, 'message' => 'Please fix the highlighted fields.', 'errors' => $errors]);
 
@@ -821,13 +854,24 @@ class NurseController
             $placeholders = implode(',', array_fill(0, count($activeIds), '?'));
 
             $stmt = $this->pdo->prepare(
-                "SELECT admission_id FROM `admission`
-                WHERE patient_id = ? AND status_id IN ($placeholders) LIMIT 1"
+                "SELECT admission_id, care_scope, chief_complaint FROM `admission`
+                WHERE patient_id = ? AND status_id IN ($placeholders)
+                ORDER BY CASE WHEN care_scope = 'ER' THEN 0 ELSE 1 END,
+                         admission_id DESC
+                LIMIT 1 FOR UPDATE"
             );
             $stmt->execute(array_merge([$patientId], $activeIds));
-            if ($stmt->fetch()) {
-                $this->pdo->rollBack();
-                $this->json(409, ['success' => false, 'message' => 'This patient already has an active admission.']);
+            $existingAdmission = $stmt->fetch();
+            if ($existingAdmission) {
+                if ($careScope !== 'INPATIENT' || $existingAdmission['care_scope'] !== 'ER') {
+                    $this->pdo->rollBack();
+                    $this->json(409, ['success' => false, 'message' => 'This patient already has an active admission.']);
+                }
+                $admissionId = (int)$existingAdmission['admission_id'];
+                $convertExistingEr = true;
+            } else {
+                $admissionId = 0;
+                $convertExistingEr = false;
             }
 
             $preferredRoomTypeId = (int)$data['preferred_room_type_id'];
@@ -839,7 +883,7 @@ class NurseController
                 $this->json(422, ['success' => false, 'message' => 'The preferred room type is not available.']);
             }
 
-            $preferredRooms = $this->getAvailableRooms($preferredRoomTypeId);
+            $preferredRooms = $this->getAvailableRooms($preferredRoomTypeId, $careScope);
             $selectedRoom = null;
             $requestedRoomId = (int)($data['room_id'] ?? 0);
             foreach ($preferredRooms as $room) {
@@ -858,8 +902,15 @@ class NurseController
                 ]);
             }
 
-            $statusId = $this->admittedStatusId();
-            if ($statusId <= 0) $statusId = 1;
+            $statusId = $careScope === 'ER'
+                ? $this->statusId('Emergency')
+                : $this->admittedStatusId();
+            if ($statusId <= 0) {
+                if ($careScope === 'ER') {
+                    throw new RuntimeException('Admission status "Emergency" is not configured. Apply the emergency admission status migration.');
+                }
+                $statusId = 1;
+            }
 
             $admissionNotes = trim((string)($data['admission_notes'] ?? ''));
             $preferenceNote = 'Preferred room type: ' . $preferredRoomTypeName
@@ -868,22 +919,61 @@ class NurseController
                 ? $preferenceNote
                 : $admissionNotes . "\n\n" . $preferenceNote;
 
-            $stmt = $this->pdo->prepare(
-                'INSERT INTO `admission`
-                    (patient_id, status_id, admission_datetime, chief_complaint,
-                    admission_type, total_room_transfers, admitted_by_user_id, notes)
-                VALUES (?, ?, NOW(), ?, ?, 0, ?, ?)'
-            );
-            $stmt->execute([
-                $patientId,
-                $statusId,
-                !empty($data['chief_complaint']) ? $data['chief_complaint'] : null,
-                !empty($data['admission_type']) ? $data['admission_type'] : 'Emergency',
-                (int)$_SESSION['user']['user_id'],
-                $admissionNotes,
-            ]);
+            if ($convertExistingEr) {
+                $oldAssignments = $this->pdo->prepare(
+                    'SELECT room_id FROM `room_assignment`
+                     WHERE admission_id = ? AND is_active = 1 AND end_datetime IS NULL'
+                );
+                $oldAssignments->execute([$admissionId]);
+                $oldRoomIds = array_map('intval', $oldAssignments->fetchAll(PDO::FETCH_COLUMN));
+                $this->pdo->prepare(
+                    'UPDATE `room_assignment`
+                     SET is_active = 0, end_datetime = NOW()
+                     WHERE admission_id = ? AND is_active = 1 AND end_datetime IS NULL'
+                )->execute([$admissionId]);
+                foreach (array_unique($oldRoomIds) as $oldRoomId) {
+                    $this->syncRoomStatus($oldRoomId);
+                }
+                $this->pdo->prepare(
+                    'UPDATE `admission_doctor`
+                     SET ended_datetime = NOW()
+                     WHERE admission_id = ? AND ended_datetime IS NULL'
+                )->execute([$admissionId]);
 
-            $admissionId = (int)$this->pdo->lastInsertId();
+                $stmt = $this->pdo->prepare(
+                    'UPDATE `admission`
+                     SET status_id = ?, chief_complaint = ?, admission_type = ?, care_scope = "INPATIENT",
+                         admitted_by_user_id = ?, notes = ?
+                     WHERE admission_id = ?'
+                );
+                $stmt->execute([
+                    $statusId,
+                    trim((string)($data['chief_complaint'] ?? '')) !== ''
+                        ? trim((string)$data['chief_complaint'])
+                        : $existingAdmission['chief_complaint'],
+                    $data['admission_type'],
+                    (int)$_SESSION['user']['user_id'],
+                    $admissionNotes,
+                    $admissionId,
+                ]);
+            } else {
+                $stmt = $this->pdo->prepare(
+                    'INSERT INTO `admission`
+                        (patient_id, status_id, admission_datetime, chief_complaint,
+                        admission_type, care_scope, total_room_transfers, admitted_by_user_id, notes)
+                    VALUES (?, ?, NOW(), ?, ?, ?, 0, ?, ?)'
+                );
+                $stmt->execute([
+                    $patientId,
+                    $statusId,
+                    !empty($data['chief_complaint']) ? $data['chief_complaint'] : null,
+                    !empty($data['admission_type']) ? $data['admission_type'] : 'Urgent',
+                    $careScope,
+                    (int)$_SESSION['user']['user_id'],
+                    $admissionNotes,
+                ]);
+                $admissionId = (int)$this->pdo->lastInsertId();
+            }
             $patientCode = $this->ensurePatientCode($patientId);
 
             $pendingBillingStatusId = (int)$this->pdo->query(
@@ -934,8 +1024,8 @@ class NurseController
                     $admissionId,
                     $pendingBillingStatusId,
                     (int)$_SESSION['user']['user_id'],
-                    'In Patient',
-                    'In Patient',
+                    $careScope === 'ER' ? 'Emergency' : 'In Patient',
+                    $careScope === 'ER' ? 'Emergency' : 'In Patient',
                     'Non-Member',
                     $patientAge,
                     $patientRow['gender_name'] ?? null,
@@ -944,6 +1034,13 @@ class NurseController
                     $selectedRoom['room_type_name'] ?? null,
                     (float)($selectedRoom['rate_per_day'] ?? 0),
                 ]);
+            }
+            if ($convertExistingEr) {
+                $this->pdo->prepare(
+                    'UPDATE `billing_statement`
+                     SET case_type = "In Patient", patient_type = "In Patient"
+                     WHERE admission_id = ?'
+                )->execute([$admissionId]);
             }
 
             $data['transfer_reason'] = 'Initial placement; preferred room type: '
@@ -994,20 +1091,25 @@ class NurseController
 
             $this->json(201, [
                 'success'      => true,
-                'message'      => 'Patient admitted successfully.',
+                'message'      => $careScope === 'ER'
+                    ? 'Emergency patient created and assigned to an ER bed.'
+                    : 'Patient admitted successfully.',
                 'admission_id' => $admissionId,
                 'patient_code' => $patientCode,
+                'care_scope'   => $careScope,
             ]);
         } catch (Throwable $e) {
             if ($this->pdo->inTransaction()) $this->pdo->rollBack();
             error_log('[NurseController::createAdmission] ' . $e->getMessage());
-            $status = (int)$e->getCode() === 409
-                || stripos($e->getMessage(), 'available bed') !== false
-                ? 409
-                : 500;
+            $status = (int)$e->getCode() === 404
+                ? 404
+                : ((int)$e->getCode() === 409
+                    || stripos($e->getMessage(), 'available bed') !== false ? 409 : 500);
             $message = $status === 409
                 ? $e->getMessage()
-                : 'Could not create admission.';
+                : (str_starts_with($e->getMessage(), 'Admission status "Emergency" is not configured.')
+                    ? $e->getMessage()
+                    : 'Could not create admission.');
             $this->json($status, [
                 'success' => false,
                 'message' => $message,
@@ -1020,7 +1122,7 @@ class NurseController
     {
         return $this->pdo->query(
             'SELECT a.admission_id, a.admission_datetime, a.discharge_datetime,
-                    a.chief_complaint, a.admission_type, a.total_room_transfers,
+                    a.chief_complaint, a.admission_type, a.care_scope, a.total_room_transfers,
                     a.status_id AS admission_status_id,
                     p.patient_id, p.first_name, p.last_name, p.patient_code,
                     ast.status_name AS admission_status_name, ast.color_code AS admission_status_color,
@@ -1030,7 +1132,8 @@ class NurseController
             FROM `admission` a
             INNER JOIN `patient` p ON p.patient_id = a.patient_id
             INNER JOIN `admission_status` ast ON ast.status_id = a.status_id
-            LEFT JOIN `room_assignment` ra ON ra.admission_id = a.admission_id AND ra.is_active = 1
+            LEFT JOIN `room_assignment` ra ON ra.admission_id = a.admission_id
+               AND ra.is_active = 1 AND ra.end_datetime IS NULL
             LEFT JOIN `room` r ON r.room_id = ra.room_id
             LEFT JOIN `room_type` rt ON rt.room_type_id = r.room_type_id
             LEFT JOIN `room_status` rs ON rs.status_id = r.status_id
@@ -1038,8 +1141,11 @@ class NurseController
         )->fetchAll();
     }
 
-    public function getAvailableRooms(?int $roomTypeId = null): array
+    public function getAvailableRooms(?int $roomTypeId = null, string $careScope = 'INPATIENT'): array
     {
+        if (!in_array($careScope, ['ER', 'INPATIENT'], true)) {
+            throw new InvalidArgumentException('Invalid room care scope.');
+        }
         $sql = 'SELECT r.room_id, r.room_number,
                 rt.room_type_id, rt.room_type_name, rt.rate_per_day, rt.charge_interval, rt.capacity,
                     rs.status_name, rs.color_code,
@@ -1061,7 +1167,11 @@ class NurseController
                     WHERE is_active = 1 AND end_datetime IS NULL
                     GROUP BY room_id
                 ) occupancy ON occupancy.room_id = r.room_id
-                WHERE r.is_active = 1
+                WHERE r.is_active = 1';
+        $sql .= $careScope === 'ER'
+            ? ' AND rt.room_type_name = "Emergency Bed"'
+            : ' AND rt.room_type_name <> "Emergency Bed"';
+        $sql .= '
                   AND rs.status_name IN ("Available", "Occupied")
                   AND rt.capacity > COALESCE(occupancy.occupied_beds, 0)';
 
@@ -1170,6 +1280,47 @@ class NurseController
 
     public function assignRoom(int $admissionId, int $roomId, array $data = []): void
     {
+        $scopeStmt = $this->pdo->prepare(
+            'SELECT ast.status_name, a.discharge_datetime, rt.room_type_name
+             FROM `admission` a
+             INNER JOIN `admission_status` ast ON ast.status_id = a.status_id
+             INNER JOIN `room` r ON r.room_id = ?
+             INNER JOIN `room_type` rt ON rt.room_type_id = r.room_type_id
+             WHERE a.admission_id = ?
+             LIMIT 1'
+        );
+        $scopeStmt->execute([$roomId, $admissionId]);
+        $roomScope = $scopeStmt->fetch();
+        if (!$roomScope) {
+            throw new RuntimeException('Admission or room was not found.', 404);
+        }
+        if ($roomScope['status_name'] === 'Discharged' || !empty($roomScope['discharge_datetime'])) {
+            throw new RuntimeException('Discharged admissions cannot be assigned to a room.', 409);
+        }
+        $isEmergencyAdmission = $roomScope['status_name'] === 'Emergency';
+        $isEmergencyBed = $roomScope['room_type_name'] === 'Emergency Bed';
+        if ($isEmergencyAdmission !== $isEmergencyBed) {
+            throw new RuntimeException(
+                $isEmergencyAdmission
+                    ? 'Emergency patients can only be assigned to Emergency Beds.'
+                    : 'Emergency Beds can only be assigned to emergency patients.',
+                409
+            );
+        }
+        if ($isEmergencyAdmission) {
+            $emergencyStatusId = $this->statusId('Emergency');
+            if ($emergencyStatusId <= 0) {
+                throw new RuntimeException('Admission status "Emergency" is not configured. Apply the emergency admission status migration.');
+            }
+            $this->pdo->prepare(
+                'UPDATE `admission` SET status_id = ? WHERE admission_id = ?'
+            )->execute([$emergencyStatusId, $admissionId]);
+        } else {
+            $this->pdo->prepare(
+                'UPDATE `admission` SET care_scope = "INPATIENT" WHERE admission_id = ?'
+            )->execute([$admissionId]);
+        }
+
         $stmt = $this->pdo->prepare(
             'SELECT room_assignment_id FROM `room_assignment`
              WHERE admission_id = ? AND room_id = ? AND is_active = 1 AND end_datetime IS NULL
@@ -1326,7 +1477,11 @@ class NurseController
         } catch (Throwable $e) {
             if ($this->pdo->inTransaction()) $this->pdo->rollBack();
             error_log('[NurseController::assignRoomApi] ' . $e->getMessage());
-            $status = stripos($e->getMessage(), 'available bed') !== false ? 409 : 500;
+            $status = (int)$e->getCode() === 404
+                ? 404
+                : ((int)$e->getCode() === 409
+                    || stripos($e->getMessage(), 'available bed') !== false
+                            || str_starts_with($e->getMessage(), 'Admission status "Emergency" is not configured.') ? 409 : 500);
             $this->json($status, ['success' => false, 'message' => $e->getMessage() ?: 'Could not assign room.']);
         }
     }
@@ -1434,27 +1589,39 @@ class NurseController
         } catch (Throwable $e) {
             if ($this->pdo->inTransaction()) $this->pdo->rollBack();
             error_log('[NurseController::transferRoom] ' . $e->getMessage());
-            $status = stripos($e->getMessage(), 'available bed') !== false ? 409 : 500;
+            $status = (int)$e->getCode() === 409
+                || stripos($e->getMessage(), 'available bed') !== false
+                ? 409
+                : 500;
             $this->json($status, ['success' => false, 'message' => $e->getMessage() ?: 'Could not transfer room.']);
         }
     }
 
-    public function getDoctors(): array
+    public function getDoctors(?string $careScope = null): array
     {
-        return $this->pdo->query(
-            'SELECT d.doctor_id, d.consultation_fee,
-                    u.first_name, u.last_name
-             FROM `doctor` d
-             INNER JOIN `user` u ON u.user_id = d.user_id
-             WHERE d.is_active = 1 AND u.is_active = 1
-             ORDER BY u.last_name, u.first_name'
-        )->fetchAll();
+        if ($careScope !== null && !in_array($careScope, ['ER', 'INPATIENT'], true)) {
+            throw new InvalidArgumentException('Invalid doctor care scope.');
+        }
+        $sql = 'SELECT d.doctor_id, d.consultation_fee, d.care_scope,
+                       u.first_name, u.last_name
+                FROM `doctor` d
+                INNER JOIN `user` u ON u.user_id = d.user_id
+                WHERE d.is_active = 1 AND u.is_active = 1';
+        $params = [];
+        if ($careScope !== null) {
+            $sql .= ' AND d.care_scope = ?';
+            $params[] = $careScope;
+        }
+        $sql .= ' ORDER BY u.last_name, u.first_name';
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll();
     }
 
     public function getAdmissionDoctors(int $admissionId): array
     {
         $stmt = $this->pdo->prepare(
-            'SELECT ad.admission_doctor_id, ad.doctor_id, ad.doctor_role,
+            'SELECT ad.admission_doctor_id, ad.doctor_id, ad.care_scope, ad.doctor_role,
                     ad.consultation_fee_charged, ad.assigned_datetime,
                     u.first_name, u.last_name
              FROM `admission_doctor` ad
@@ -1469,15 +1636,31 @@ class NurseController
 
     private function saveAdmissionDoctors(int $admissionId, array $doctorIds, array $doctorRoles): void
     {
+        $scopeStmt = $this->pdo->prepare(
+            'SELECT ast.status_name
+             FROM `admission` a
+             INNER JOIN `admission_status` ast ON ast.status_id = a.status_id
+             WHERE a.admission_id = ? LIMIT 1'
+        );
+        $scopeStmt->execute([$admissionId]);
+        $statusName = (string)$scopeStmt->fetchColumn();
+        if ($statusName === '' || $statusName === 'Discharged') {
+            throw new RuntimeException('Only active admissions can be assigned doctors.');
+        }
+        $careScope = $statusName === 'Emergency' ? 'ER' : 'INPATIENT';
+        $this->pdo->prepare(
+            'UPDATE `admission` SET care_scope = ? WHERE admission_id = ?'
+        )->execute([$careScope, $admissionId]);
+
         $insert = $this->pdo->prepare(
             'INSERT INTO `admission_doctor`
-                (admission_id, doctor_id, doctor_role, assigned_datetime,
+                (admission_id, doctor_id, care_scope, doctor_role, assigned_datetime,
                  ended_datetime, consultation_fee_charged)
-             VALUES (?, ?, ?, NOW(), NULL, ?)'
+             VALUES (?, ?, ?, ?, NOW(), NULL, ?)'
         );
 
         $feeLookup = $this->pdo->prepare(
-            'SELECT consultation_fee FROM `doctor` WHERE doctor_id = ? LIMIT 1'
+            'SELECT consultation_fee, care_scope FROM `doctor` WHERE doctor_id = ? LIMIT 1'
         );
 
         $exists = $this->pdo->prepare(
@@ -1496,9 +1679,17 @@ class NurseController
             $role = $doctorRoles[$doctorId] ?? 'Attending';
 
             $feeLookup->execute([$doctorId]);
-            $fee = (float)($feeLookup->fetchColumn() ?: 0);
+            $doctor = $feeLookup->fetch();
+            if (!$doctor || $doctor['care_scope'] !== $careScope) {
+                throw new RuntimeException(
+                    $careScope === 'ER'
+                        ? 'Only Emergency Doctors can be assigned to ER patients.'
+                        : 'Only Admission Doctors can be assigned to admitted patients.'
+                );
+            }
+            $fee = (float)$doctor['consultation_fee'];
 
-            $insert->execute([$admissionId, $doctorId, $role, $fee]);
+            $insert->execute([$admissionId, $doctorId, $careScope, $role, $fee]);
         }
     }
 
@@ -1520,17 +1711,19 @@ class NurseController
             $placeholders = implode(',', array_fill(0, count($activeIds), '?'));
 
             $stmt = $this->pdo->prepare(
-                "SELECT admission_id FROM `admission`
-                 WHERE admission_id = ? AND status_id IN ($placeholders) LIMIT 1"
+                "SELECT a.admission_id, ast.status_name FROM `admission` a
+                 INNER JOIN `admission_status` ast ON ast.status_id = a.status_id
+                 WHERE a.admission_id = ? AND a.status_id IN ($placeholders) LIMIT 1"
             );
             $stmt->execute(array_merge([$admissionId], $activeIds));
-            if (!$stmt->fetch()) {
+            $admission = $stmt->fetch();
+            if (!$admission) {
                 $this->pdo->rollBack();
                 $this->json(404, ['success' => false, 'message' => 'Active admission not found.']);
             }
 
             $stmt = $this->pdo->prepare(
-                'SELECT d.doctor_id, d.consultation_fee
+                'SELECT d.doctor_id, d.consultation_fee, d.care_scope
                  FROM `doctor` d
                  INNER JOIN `user` u ON u.user_id = d.user_id
                  WHERE d.doctor_id = ? AND d.is_active = 1 AND u.is_active = 1
@@ -1541,6 +1734,16 @@ class NurseController
             if (!$doctor) {
                 $this->pdo->rollBack();
                 $this->json(404, ['success' => false, 'message' => 'Doctor not found or inactive.']);
+            }
+            $admissionCareScope = $admission['status_name'] === 'Emergency' ? 'ER' : 'INPATIENT';
+            if ($doctor['care_scope'] !== $admissionCareScope) {
+                $this->pdo->rollBack();
+                $this->json(409, [
+                    'success' => false,
+                    'message' => $admissionCareScope === 'ER'
+                        ? 'Only Emergency Doctors can be assigned to ER patients.'
+                        : 'Only Admission Doctors can be assigned to admitted patients.',
+                ]);
             }
 
             $dup = $this->pdo->prepare(
@@ -1828,12 +2031,19 @@ class NurseController
         return $this->pdo->query('SELECT status_id, status_name, color_code FROM `admission_status` ORDER BY status_id')->fetchAll();
     }
 
-    public function getRoomTypes(): array
+    public function getRoomTypes(string $careScope = 'INPATIENT'): array
     {
-        return $this->pdo->query(
-            'SELECT room_type_id, room_type_name, rate_per_day, charge_interval
-             FROM `room_type` ORDER BY room_type_name'
-        )->fetchAll();
+        $sql = 'SELECT room_type_id, room_type_name, rate_per_day, charge_interval
+                FROM `room_type`';
+        if ($careScope === 'ER') {
+            $sql .= ' WHERE room_type_name = "Emergency Bed"';
+        } elseif ($careScope === 'INPATIENT') {
+            $sql .= ' WHERE room_type_name <> "Emergency Bed"';
+        } else {
+            throw new InvalidArgumentException('Invalid room care scope.');
+        }
+        $sql .= ' ORDER BY room_type_name';
+        return $this->pdo->query($sql)->fetchAll();
     }
 
     public function getBuildings(): array
@@ -1980,6 +2190,8 @@ class NurseController
 
         if (empty($data['admission_type'])) {
             $errors['admission_type'] = 'Please select an admission type.';
+        } elseif (!in_array($data['admission_type'], ['Elective', 'Urgent'], true)) {
+            $errors['admission_type'] = 'Please select a valid admission type.';
         }
 
         if (empty($data['preferred_room_type_id']) || (int)$data['preferred_room_type_id'] <= 0) {

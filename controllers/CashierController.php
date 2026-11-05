@@ -421,12 +421,23 @@ class CashierController
         if ($itemId <= 0 || $quantity <= 0) throw new Exception('Invalid charge data.');
 
         $stmt = $this->pdo->prepare(
-            'SELECT charge_item_id, default_price, item_name FROM `charge_item`
-            WHERE charge_item_id = ? AND is_active = 1 LIMIT 1'
+            'SELECT ci.charge_item_id, ci.default_price, ci.item_name, cc.category_name,
+                    a.care_scope
+             FROM `charge_item` ci
+             INNER JOIN `charge_category` cc ON cc.category_id = ci.category_id
+             INNER JOIN `billing_statement` bs ON bs.statement_id = ?
+             INNER JOIN `admission` a ON a.admission_id = bs.admission_id
+             WHERE ci.charge_item_id = ? AND ci.is_active = 1 LIMIT 1'
         );
-        $stmt->execute([$itemId]);
+        $stmt->execute([$statementId, $itemId]);
         $item = $stmt->fetch();
         if (!$item) throw new Exception('Charge item not found or inactive.');
+        $isEmergencyCharge = $item['category_name'] === 'Emergency Room';
+        if (($isEmergencyCharge ? 'ER' : 'INPATIENT') !== $item['care_scope']) {
+            throw new Exception($isEmergencyCharge
+                ? 'Emergency Room charges are only allowed for ER patients.'
+                : 'Regular admission charges are only allowed for admitted patients.');
+        }
         $price = isset($data['actual_price']) && is_numeric($data['actual_price'])
             ? (float)$data['actual_price']
             : (float)$item['default_price'];
@@ -439,8 +450,8 @@ class CashierController
         $stmt = $this->pdo->prepare(
             'INSERT INTO `charge`
                 (statement_id, charge_item_id, quantity, actual_price,
-                charge_datetime, processed_by_user_id, notes, source_type)
-            VALUES (?, ?, ?, ?, NOW(), ?, ?, "MANUAL")'
+                charge_datetime, processed_by_user_id, notes, source_type, care_scope)
+            VALUES (?, ?, ?, ?, NOW(), ?, ?, "MANUAL", ?)'
         );
         $stmt->execute([
             $statementId,
@@ -449,6 +460,7 @@ class CashierController
             $price,
             (int)($_SESSION['user']['user_id'] ?? 0),
             $note,
+            $item['care_scope'],
         ]);
 
         (new ChargeSyncService($this->pdo))->syncStatement($statementId);

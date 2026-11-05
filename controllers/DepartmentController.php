@@ -48,7 +48,7 @@ class DepartmentController
     {
         $sql = 'SELECT sr.request_id, sr.department_id, sr.priority, sr.status, sr.notes, sr.request_datetime,
                        sr.completed_datetime, sr.cancelled_datetime,
-                       a.admission_id, a.chief_complaint,
+                       a.admission_id, a.chief_complaint, a.care_scope,
                        p.patient_id, p.first_name, p.last_name,
                        u.first_name AS doctor_first, u.last_name AS doctor_last,
                        d.department_name,

@@ -16,10 +16,10 @@ use React\Socket\SocketServer;
 | WebSocket Notification Server
 |--------------------------------------------------------------------------
 | WebSocket address: ws://0.0.0.0:<WEBSOCKET_PORT>
-| Rate limiter:      127.0.0.1:8081
+| Broadcast relay:   127.0.0.1:<WEBSOCKET_BROADCAST_PORT>
 |
-| This version logs each client's IP address, and lists which clients
-| received every esp32.* event, so you can see if the ESP32 is connected.
+| Browser clients may subscribe to portal refresh events. PHP-originated
+| broadcasts arrive through the loopback-only relay.
 |--------------------------------------------------------------------------
 */
 
@@ -34,15 +34,6 @@ class BillingNotifier implements MessageComponentInterface
         $this->patientPortalClients = new SplObjectStorage();
 
         echo "[INIT] BillingNotifier initialized\n";
-    }
-
-    private function ipOf(ConnectionInterface $conn): string
-    {
-        try {
-            return (string) ($conn->remoteAddress ?? 'unknown');
-        } catch (\Throwable $e) {
-            return 'unknown';
-        }
     }
 
     public function onOpen(ConnectionInterface $conn): void
@@ -60,38 +51,22 @@ class BillingNotifier implements MessageComponentInterface
         }
 
         echo sprintf(
-            "[%s] [WS OPEN] ID=%s | IP=%s | Total clients=%d\n",
+            "[%s] [WS OPEN] ID=%s | Total clients=%d\n",
             date('Y-m-d H:i:s'),
             $conn->resourceId,
-            $this->ipOf($conn),
             $this->clients->count()
         );
     }
 
     public function onMessage(ConnectionInterface $from, $msg): void
     {
-        echo sprintf(
-            "[%s] [WS MESSAGE] ID=%s | IP=%s | Bytes=%d\n",
-            date('Y-m-d H:i:s'),
-            $from->resourceId,
-            $this->ipOf($from),
-            strlen((string) $msg)
-        );
-
         $data = json_decode((string) $msg, true);
-
         if (!is_array($data)) {
-            echo sprintf(
-                "[WS WARNING] Invalid JSON from ID=%s\n",
-                $from->resourceId
-            );
             return;
         }
 
-        $action = $data['action'] ?? '';
-
         if ($this->patientPortalClients->contains($from)) {
-            if ($action === 'subscribe_patient_portal') {
+            if (($data['action'] ?? '') === 'subscribe_patient_portal') {
                 $this->patientPortalClients[$from] = [
                     'patient_id' => max(0, (int)($data['patient_id'] ?? 0)),
                     'admission_ids' => $this->normalizeSubscriptionIds($data['admission_ids'] ?? []),
@@ -101,24 +76,24 @@ class BillingNotifier implements MessageComponentInterface
             return;
         }
 
-        if ($action !== 'broadcast') {
-            echo sprintf(
-                "[WS INFO] Ignored message from ID=%s | Action=%s\n",
-                $from->resourceId,
-                (string) $action
-            );
+        // Broadcasts are accepted only from the loopback TCP relay below.
+    }
+
+    public function broadcast(array $data): void
+    {
+        $eventName = trim((string)($data['event'] ?? ''));
+        if ($eventName === '' || strlen($eventName) > 100) {
             return;
         }
 
-        $eventName = (string) ($data['event'] ?? 'update');
-
+        $payload = is_array($data['payload'] ?? null) ? $data['payload'] : [];
         $frame = json_encode([
             'type'       => 'event',
             'event'      => $eventName,
-            'payload'    => $data['payload'] ?? [],
-            'roles'      => $data['roles'] ?? [],
-            'user_ids'   => $data['user_ids'] ?? [],
-            'department' => $data['department_id'] ?? null,
+            'payload'    => $payload,
+            'roles'      => is_array($data['roles'] ?? null) ? array_values($data['roles']) : [],
+            'user_ids'   => is_array($data['user_ids'] ?? null) ? array_values($data['user_ids']) : [],
+            'department' => isset($data['department_id']) ? (int)$data['department_id'] : null,
             'timestamp'  => time(),
         ]);
 
@@ -129,7 +104,7 @@ class BillingNotifier implements MessageComponentInterface
 
         $sent = 0;
         $failed = 0;
-        $recipients = [];
+        $failedClients = [];
 
         foreach ($this->clients as $client) {
             try {
@@ -146,20 +121,20 @@ class BillingNotifier implements MessageComponentInterface
 
                 $client->send($frame);
                 $sent++;
-                $recipients[] = sprintf(
-                    'ID=%s IP=%s',
-                    $client->resourceId,
-                    $this->ipOf($client)
-                );
             } catch (\Throwable $e) {
                 $failed++;
-
-                echo sprintf(
-                    "[WS SEND ERROR] ID=%s | %s\n",
-                    $client->resourceId,
-                    $e->getMessage()
-                );
+                $failedClients[] = $client;
             }
+        }
+
+        foreach ($failedClients as $client) {
+            if ($this->clients->contains($client)) {
+                $this->clients->detach($client);
+            }
+            if ($this->patientPortalClients->contains($client)) {
+                $this->patientPortalClients->detach($client);
+            }
+            $client->close();
         }
 
         echo sprintf(
@@ -169,12 +144,6 @@ class BillingNotifier implements MessageComponentInterface
             $failed
         );
 
-        // For ESP32 notifications, show exactly who received it
-        if (str_starts_with($eventName, 'esp32.')) {
-            foreach ($recipients as $recipient) {
-                echo "    -> " . $recipient . "\n";
-            }
-        }
     }
 
     public function onClose(ConnectionInterface $conn): void
@@ -187,10 +156,9 @@ class BillingNotifier implements MessageComponentInterface
         }
 
         echo sprintf(
-            "[%s] [WS CLOSE] ID=%s | IP=%s | Remaining clients=%d\n",
+            "[%s] [WS CLOSE] ID=%s | Remaining clients=%d\n",
             date('Y-m-d H:i:s'),
             $conn->resourceId,
-            $this->ipOf($conn),
             $this->clients->count()
         );
     }
@@ -244,9 +212,8 @@ class BillingNotifier implements MessageComponentInterface
 |--------------------------------------------------------------------------
 */
 
-$webSocketApp = new WsServer(
-    new BillingNotifier()
-);
+$notifier = new BillingNotifier();
+$webSocketApp = new WsServer($notifier);
 
 $webSocketHttp = new HttpServer(
     $webSocketApp
@@ -260,133 +227,41 @@ $server = IoServer::factory(
 
 /*
 |--------------------------------------------------------------------------
-| In-memory Rate Limiter
-|--------------------------------------------------------------------------
-| This preserves your existing rate limiter.
-| It is separate from the WebSocket connection handler.
+| Loopback-only PHP broadcast relay
 |--------------------------------------------------------------------------
 */
 
-$loginAttempts = [];
-
-$rateLimiter = new SocketServer('127.0.0.1:8081');
-
-$rateLimiter->on(
+$broadcastRelay = new SocketServer('127.0.0.1:' . WEBSOCKET_BROADCAST_PORT);
+$broadcastRelay->on(
     'connection',
-    static function (
-        SocketConnectionInterface $connection
-    ) use (&$loginAttempts): void {
-
+    static function (SocketConnectionInterface $connection) use ($notifier): void {
         $buffer = '';
-
         $connection->on(
             'data',
-            static function (string $chunk) use (
-                $connection,
-                &$buffer,
-                &$loginAttempts
-            ): void {
-
+            static function (string $chunk) use ($connection, &$buffer, $notifier): void {
                 $buffer .= $chunk;
-
-                if (strlen($buffer) > 2048) {
-                    $connection->end(
-                        "{\"allowed\":false,\"retry_after\":60}\n"
-                    );
+                if (strlen($buffer) > 65536) {
+                    $connection->end();
                     return;
                 }
 
                 $lineEnd = strpos($buffer, "\n");
-
                 if ($lineEnd === false) {
                     return;
                 }
 
-                $request = json_decode(
-                    substr($buffer, 0, $lineEnd),
-                    true
-                );
-
-                $ipAddress = is_array($request)
-                    ? (string) ($request['ip'] ?? '')
-                    : '';
-
-                if (
-                    filter_var(
-                        $ipAddress,
-                        FILTER_VALIDATE_IP
-                    ) === false
-                ) {
-                    $connection->end(
-                        "{\"allowed\":false,\"retry_after\":60}\n"
-                    );
-                    return;
+                $request = json_decode(substr($buffer, 0, $lineEnd), true);
+                if (is_array($request) && ($request['action'] ?? '') === 'broadcast') {
+                    $notifier->broadcast($request);
                 }
-
-                $now = time();
-
-                foreach ($loginAttempts as $ip => $attempts) {
-                    if (
-                        $now - $attempts['started_at'] >= 900
-                    ) {
-                        unset($loginAttempts[$ip]);
-                    }
-                }
-
-                if (!isset($loginAttempts[$ipAddress])) {
-                    if (count($loginAttempts) >= 10000) {
-                        $connection->end(
-                            "{\"allowed\":false,\"retry_after\":900}\n"
-                        );
-                        return;
-                    }
-
-                    $loginAttempts[$ipAddress] = [
-                        'started_at' => $now,
-                        'count' => 0,
-                    ];
-                }
-
-                $attempts = &$loginAttempts[$ipAddress];
-
-                if ($attempts['count'] >= 10) {
-                    $retryAfter = max(
-                        1,
-                        900 - ($now - $attempts['started_at'])
-                    );
-
-                    $connection->end(
-                        json_encode([
-                            'allowed' => false,
-                            'retry_after' => $retryAfter,
-                        ]) . "\n"
-                    );
-
-                    unset($attempts);
-                    return;
-                }
-
-                $attempts['count']++;
-
-                $connection->end(
-                    "{\"allowed\":true,\"retry_after\":0}\n"
-                );
-
-                unset($attempts);
+                $connection->end();
             }
         );
     }
 );
-
-$rateLimiter->on(
-    'error',
-    static function (\Throwable $error): void {
-        error_log(
-            '[patient_portal_rate_limit] ' .
-            $error->getMessage()
-        );
-    }
-);
+$broadcastRelay->on('error', static function (\Throwable $error): void {
+    error_log('[websocket_broadcast_relay] ' . $error->getMessage());
+});
 
 /*
 |--------------------------------------------------------------------------
@@ -398,7 +273,7 @@ echo "============================================\n";
 echo " Billing Notification WebSocket Server\n";
 echo "============================================\n";
 echo "WebSocket:  ws://0.0.0.0:" . WEBSOCKET_PORT . "\n";
-echo "Rate limit: 127.0.0.1:8081\n";
+echo "PHP relay:  127.0.0.1:" . WEBSOCKET_BROADCAST_PORT . "\n";
 echo "Started:    " . date('Y-m-d H:i:s') . "\n";
 echo "Waiting for connections...\n";
 echo "============================================\n";

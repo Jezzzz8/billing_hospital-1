@@ -41,6 +41,24 @@ class ChargeSyncService
             $this->syncLiveServices($statementId, $admissionId);
             $this->syncLiveDoctors($statementId, $admissionId);
             $this->syncLiveEmergencyCharges($statementId);
+            $scopeStmt = $this->pdo->prepare(
+                'SELECT a.care_scope
+                 FROM `billing_statement` bs
+                 INNER JOIN `admission` a ON a.admission_id = bs.admission_id
+                 WHERE bs.statement_id = ? LIMIT 1'
+            );
+            $scopeStmt->execute([$statementId]);
+            $careScope = (string)$scopeStmt->fetchColumn();
+            if (!in_array($careScope, ['ER', 'INPATIENT', 'OUTPATIENT'], true)) {
+                throw new RuntimeException('Admission care scope is not configured.');
+            }
+            $chargeCareScope = $careScope === 'ER' ? 'ER' : 'INPATIENT';
+            $scopeUpdate = $this->pdo->prepare(
+                'UPDATE `charge`
+                 SET care_scope = ?
+                 WHERE statement_id = ? AND source_type IN ("FULFILLMENT", "MEDICINE_RETURN")'
+            );
+            $scopeUpdate->execute([$chargeCareScope, $statementId]);
             $this->recomputeStatement($statementId);
             if ($ownTransaction) $this->pdo->commit();
         } catch (Throwable $e) {
@@ -66,6 +84,7 @@ class ChargeSyncService
 
         foreach ($assignments as $a) {
             $marker = 'source=room:' . $a['room_assignment_id'];
+            $careScope = $a['room_type_name'] === 'Emergency Bed' ? 'ER' : 'INPATIENT';
 
             $itemId = $this->findRoomChargeItem($a['room_type_name']);
             if ($itemId <= 0) {
@@ -94,7 +113,7 @@ class ChargeSyncService
                 $upd = $this->pdo->prepare(
                     'UPDATE `charge`
                      SET charge_item_id = ?, quantity = ?, actual_price = ?,
-                         charge_interval = ?,
+                         charge_interval = ?, care_scope = ?,
                          service_end_date = ?
                      WHERE charge_id = ?'
                 );
@@ -103,6 +122,7 @@ class ChargeSyncService
                     $quantity,
                     (float)$a['daily_rate_at_assignment'],
                     $interval,
+                    $careScope,
                     $a['end_datetime'] ? $end->format('Y-m-d') : null,
                     (int)$existing['charge_id'],
                 ]);
@@ -111,9 +131,9 @@ class ChargeSyncService
                     'INSERT INTO `charge`
                         (statement_id, charge_item_id, quantity, actual_price, charge_interval,
                          charge_datetime, processed_by_user_id, notes,
-                         service_start_date, service_end_date, source_type,
+                         service_start_date, service_end_date, source_type, care_scope,
                          room_assignment_id)
-                     VALUES (?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, "ROOM", ?)'
+                     VALUES (?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, "ROOM", ?, ?)'
                 );
                 $ins->execute([
                     $statementId,
@@ -125,6 +145,7 @@ class ChargeSyncService
                     'Room ' . $a['room_number'] . ' (' . $a['room_type_name'] . ') — ' . $marker,
                     $start->format('Y-m-d'),
                     $a['end_datetime'] ? $end->format('Y-m-d') : null,
+                    $careScope,
                     (int)$a['room_assignment_id'],
                 ]);
             }
@@ -224,7 +245,7 @@ class ChargeSyncService
     private function syncLiveDoctors(int $statementId, int $admissionId): void
     {
         $stmt = $this->pdo->prepare(
-            'SELECT ad.admission_doctor_id, ad.consultation_fee_charged,
+            'SELECT ad.admission_doctor_id, ad.care_scope, ad.consultation_fee_charged,
                     u.first_name, u.last_name
              FROM `admission_doctor` ad
              INNER JOIN `doctor` d ON d.doctor_id = ad.doctor_id
@@ -237,17 +258,20 @@ class ChargeSyncService
 
         if (!$doctors) return;
 
-        $itemId = $this->findConsultChargeItem();
-        if ($itemId <= 0) {
-            throw new RuntimeException('No active Professional Fee charge item is configured.');
+        $itemIds = [
+            'ER' => $this->findDoctorChargeItem('ER'),
+            'INPATIENT' => $this->findDoctorChargeItem('INPATIENT'),
+        ];
+        if ($itemIds['ER'] <= 0 || $itemIds['INPATIENT'] <= 0) {
+            throw new RuntimeException('Doctor charge items for both ER and inpatient care must be configured.');
         }
 
         $insert = $this->pdo->prepare(
             'INSERT INTO `charge`
                 (statement_id, charge_item_id, quantity, actual_price,
                  charge_datetime, processed_by_user_id, notes,
-                 source_type, admission_doctor_id)
-             VALUES (?, ?, 1, ?, NOW(), ?, ?, "PROFESSIONAL_FEE", ?)'
+                 source_type, care_scope, admission_doctor_id)
+             VALUES (?, ?, 1, ?, NOW(), ?, ?, "PROFESSIONAL_FEE", ?, ?)'
         );
         $userId = isset($_SESSION['user']['user_id'])
             ? (int)$_SESSION['user']['user_id']
@@ -255,6 +279,8 @@ class ChargeSyncService
 
         foreach ($doctors as $d) {
             $marker = 'source=doctor:' . $d['admission_doctor_id'];
+            $careScope = (string)$d['care_scope'];
+            $itemId = $itemIds[$careScope] ?? 0;
 
             $chk = $this->pdo->prepare(
                 'SELECT charge_id FROM `charge`
@@ -269,13 +295,14 @@ class ChargeSyncService
             if ($existingChargeId > 0) {
                 $update = $this->pdo->prepare(
                     'UPDATE `charge`
-                     SET charge_item_id = ?, quantity = 1, actual_price = ?, amount = ?
+                     SET charge_item_id = ?, quantity = 1, actual_price = ?, amount = ?, care_scope = ?
                      WHERE charge_id = ?'
                 );
                 $update->execute([
                     $itemId,
                     $fee,
                     $fee,
+                    $careScope,
                     $existingChargeId,
                 ]);
                 continue;
@@ -289,6 +316,7 @@ class ChargeSyncService
                 $fee,
                 $userId,
                 'Consultation — Dr. ' . $d['first_name'] . ' ' . $d['last_name'] . ' — ' . $marker,
+                $careScope,
                 (int)$d['admission_doctor_id'],
             ]);
         }
@@ -534,18 +562,18 @@ class ChargeSyncService
         return (int)$stmt->fetchColumn();
     }
 
-    private function findConsultChargeItem(): int
+    private function findDoctorChargeItem(string $careScope): int
     {
         $stmt = $this->pdo->prepare(
             'SELECT ci.charge_item_id
              FROM `charge_item` ci
              LEFT JOIN `charge_category` cc ON cc.category_id = ci.category_id
              WHERE ci.is_active = 1
-               AND (ci.item_code = "PROF-CONSULT" OR cc.category_name = "Professional Fee")
-             ORDER BY (ci.item_code = "PROF-CONSULT") DESC, ci.charge_item_id
+               AND ci.item_code = ?
+             ORDER BY ci.charge_item_id
              LIMIT 1'
         );
-        $stmt->execute();
+        $stmt->execute([$careScope === 'ER' ? 'PROF-ER-CONSULT' : 'PROF-CONSULT']);
         return (int)$stmt->fetchColumn();
     }
 }

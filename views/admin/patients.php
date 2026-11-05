@@ -375,7 +375,6 @@ $admittedNow      = count(array_filter($patients, fn($p) => !empty($p['admission
                         <div>
                             <label class="block text-sm font-medium text-slate-700 mb-1.5">Admission Type</label>
                             <select id="admission_type" class="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
-                                <option value="Emergency">Emergency</option>
                                 <option value="Elective">Elective</option>
                                 <option value="Urgent">Urgent</option>
                             </select>

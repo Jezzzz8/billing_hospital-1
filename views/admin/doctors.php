@@ -15,7 +15,7 @@ $archivedDoctors = $totalDoctors - $activeDoctors;
 <div class="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
     <div>
         <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Doctors</h1>
-        <p class="mt-1 text-sm text-slate-500">Manage physicians, their licenses, and specializations.</p>
+        <p class="mt-1 text-sm text-slate-500">Manage physicians, care scope, licenses, and specializations.</p>
     </div>
     <button type="button" id="openCreateBtn"
             class="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
@@ -93,6 +93,7 @@ $archivedDoctors = $totalDoctors - $activeDoctors;
                     <th class="text-left px-6 py-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide">Doctor</th>
                     <th class="text-left px-6 py-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide">License</th>
                     <th class="text-right px-6 py-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide">Fee</th>
+                    <th class="text-left px-6 py-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide">Scope</th>
                     <th class="text-left px-6 py-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide">Specializations</th>
                     <th class="text-left px-6 py-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide">State</th>
                     <th class="text-right px-6 py-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide">Actions</th>
@@ -127,6 +128,12 @@ $archivedDoctors = $totalDoctors - $activeDoctors;
 
                         <td class="px-6 py-4 text-right font-medium text-slate-900 whitespace-nowrap">
                             ₱<?= number_format((float)$d['consultation_fee'], 2) ?>
+                        </td>
+
+                        <td class="px-6 py-4">
+                            <span class="inline-flex rounded-full border px-2.5 py-1 text-xs font-medium <?= $d['care_scope'] === 'ER' ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-blue-200 bg-blue-50 text-blue-800' ?>">
+                                <?= $d['care_scope'] === 'ER' ? 'Emergency Doctor' : 'Admission Doctor' ?>
+                            </span>
                         </td>
 
                         <td class="px-6 py-4 max-w-md">
@@ -306,6 +313,16 @@ $archivedDoctors = $totalDoctors - $activeDoctors;
                     <input type="number" id="consultation_fee" required min="0" step="0.01" placeholder="500.00"
                            class="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
                     <p class="mt-1.5 text-xs text-red-600 hidden" data-error-for="consultation_fee"></p>
+                </div>
+
+                <div class="sm:col-span-2">
+                    <label class="block text-sm font-medium text-slate-700 mb-1.5">Doctor Scope</label>
+                    <select id="care_scope" required
+                            class="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm">
+                        <option value="INPATIENT">Admission Doctor — regular inpatient charges</option>
+                        <option value="ER">Emergency Doctor — ER services and fees</option>
+                    </select>
+                    <p class="mt-1.5 text-xs text-red-600 hidden" data-error-for="care_scope"></p>
                 </div>
 
                 

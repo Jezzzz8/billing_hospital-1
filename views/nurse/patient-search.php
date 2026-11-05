@@ -9,8 +9,8 @@ $patients = $searchQuery ? $controller->searchPatients($searchQuery) : [];
 ?>
 
 <div class="mb-8">
-    <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Find Patient</h1>
-    <p class="mt-1 text-sm text-slate-500">Search for existing patient records by name, contact, or email.</p>
+    <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Find Registered Patient</h1>
+    <p class="mt-1 text-sm text-slate-500">Search registered patient records by name, contact, or email to start or manage an Emergency visit.</p>
 </div>
 
 
@@ -79,6 +79,20 @@ $patients = $searchQuery ? $controller->searchPatients($searchQuery) : [];
                     </thead>
                     <tbody class="divide-y divide-slate-100">
                         <?php foreach ($patients as $p): ?>
+                            <?php
+                            $patientCareScope = $p['care_scope'] ?? 'INPATIENT';
+                            $isEmergencyEncounter = $patientCareScope === 'ER';
+                            $patientCareScopeLabel = match ($patientCareScope) {
+                                'ER' => 'ER encounter',
+                                'OUTPATIENT' => 'Outpatient encounter',
+                                default => 'Inpatient encounter',
+                            };
+                            $patientCareScopeClass = match ($patientCareScope) {
+                                'ER' => 'text-amber-700',
+                                'OUTPATIENT' => 'text-emerald-700',
+                                default => 'text-blue-700',
+                            };
+                            ?>
                             <tr class="hover:bg-slate-50">
                                 <td class="px-6 py-4">
                                     <div class="flex items-center gap-3">
@@ -111,6 +125,12 @@ $patients = $searchQuery ? $controller->searchPatients($searchQuery) : [];
                                         <p class="text-xs text-slate-500 mt-1">
                                             <?= htmlspecialchars(date('M j, Y', strtotime($p['admission_datetime']))) ?>
                                         </p>
+                                        <p class="text-xs font-medium <?= $patientCareScopeClass ?>">
+                                            <?= htmlspecialchars($patientCareScopeLabel) ?>
+                                        </p>
+                                        <?php if (!empty($p['room_type_name'])): ?>
+                                            <p class="text-xs text-slate-500"><?= htmlspecialchars($p['room_type_name']) ?><?= !empty($p['room_number']) ? ' · ' . htmlspecialchars($p['room_number']) : '' ?></p>
+                                        <?php endif; ?>
                                     <?php else: ?>
                                         <span class="text-xs text-slate-400 italic">Not admitted</span>
                                     <?php endif; ?>
@@ -118,17 +138,20 @@ $patients = $searchQuery ? $controller->searchPatients($searchQuery) : [];
                                 <td class="px-6 py-4 text-right whitespace-nowrap">
                                     <div class="inline-flex items-center gap-2">
                                         <?php if (empty($p['admission_id'])): ?>
-                                            <a href="<?= BASE_URL ?>/index.php?page=nurse-admission-create&patient_id=<?= (int)$p['patient_id'] ?>"
-                                               class="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100">
-                                                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
-                                                </svg>
-                                                Admit
+                                            <a href="<?= BASE_URL ?>/index.php?page=nurse-emergency-create&patient_id=<?= (int)$p['patient_id'] ?>"
+                                               class="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100">
+                                                Start ER Visit
                                             </a>
                                         <?php else: ?>
+                                            <?php if ($isEmergencyEncounter): ?>
+                                                <a href="<?= BASE_URL ?>/index.php?page=nurse-admission-create&patient_id=<?= (int)$p['patient_id'] ?>"
+                                                   class="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100">
+                                                    Admit Patient
+                                                </a>
+                                            <?php endif; ?>
                                             <a href="<?= BASE_URL ?>/index.php?page=nurse-room-assignments&admission_id=<?= (int)$p['admission_id'] ?>"
                                                class="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100">
-                                                Manage Admission
+                                                <?= ($p['care_scope'] ?? '') === 'ER' ? 'Manage Emergency' : 'Manage Admission' ?>
                                             </a>
                                         <?php endif; ?>
                                     </div>

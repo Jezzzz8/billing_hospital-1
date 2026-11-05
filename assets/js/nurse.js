@@ -2,9 +2,9 @@ function initializeNursePage(event) {
     const page = event?.detail?.page || document.body.dataset.page || '';
     if (!page.startsWith('nurse')) return;
 
+    const baseUrl = document.body.dataset.baseUrl || '';
     const root = document.querySelector('[data-nurse-view]');
     if (!root) return;
-    const baseUrl = document.body.dataset.baseUrl || '';
     const apiUrl = `${baseUrl}/api/nurse.php`;
     const view = root.dataset.nurseView;
     const writeOperations = new Set([
@@ -761,7 +761,7 @@ function initializeNursePage(event) {
                     <td class="px-5 py-4">${p.admission_id ? `${badge(p.admission_status_name, p.admission_status_color)}<small class="block text-slate-500">${date(p.admission_datetime)}</small>` : '<span class="text-slate-400">Not admitted</span>'}</td>
                     <td class="px-5 py-4 text-right">${p.admission_id
                         ? `<a class="text-blue-700 underline" href="${link('nurse-room-assignments', { admission_id: p.admission_id })}">Manage admission</a>`
-                        : `<a class="text-blue-700 underline" href="${link('nurse-admission-create', { patient_id: p.patient_id })}">Admit</a>`}</td></tr>`).join('')}</tbody>
+                        : `<a class="text-blue-700 underline" href="${link('nurse-emergency-create', { patient_id: p.patient_id })}">Start ER visit</a>`}</td></tr>`).join('')}</tbody>
                 </table></div></div>` : emptyState('No patients found', 'Try a different search term or register a new patient.');
         } catch (error) {
             target.innerHTML = emptyState('Could not search patients', error.message);
@@ -806,8 +806,8 @@ function initializeNursePage(event) {
                 const id = result.patient_id;
                 if (id) {
                     const followup = document.createElement('a');
-                    followup.href = link('nurse-admission-create', { patient_id: id });
-                    followup.textContent = ' Create admission';
+                    followup.href = link('nurse-emergency-create', { patient_id: id });
+                    followup.textContent = ' Continue to Emergency Patient';
                     followup.className = 'ml-2 font-semibold underline';
                     document.getElementById('nurseAlert').append(followup);
                 }
@@ -826,6 +826,7 @@ function initializeNursePage(event) {
         const patientId = document.getElementById('patient_id');
         const results = document.getElementById('patientResults');
         const selected = document.getElementById('selectedPatient');
+        const patientSearchScope = form.dataset.careScope === 'INPATIENT' ? 'ER' : null;
         let roomOptions = [];
         let searchTimer;
         let selectedData = null;
@@ -868,7 +869,7 @@ function initializeNursePage(event) {
         const initialId = Number(patientId.value || 0);
         if (initialId) {
             try {
-                const p = await request('patient-details', { params: { id: initialId } });
+                const p = await request('patient-details', { params: { id: initialId, care_scope: patientSearchScope } });
                 renderSelected(p);
                 if (p.current_admission) showNotice(`This patient already has an active admission (#${p.current_admission.admission_id}). Manage that admission instead.`);
             } catch (error) {
@@ -885,8 +886,8 @@ function initializeNursePage(event) {
             }
             searchTimer = setTimeout(async () => {
                 try {
-                    const patients = await request('search-patients', { params: { q: query } });
-                    results.innerHTML = patients.length ? patients.map(p => `<button type="button" data-patient-id="${Number(p.patient_id)}" class="block w-full border-b px-4 py-3 text-left hover:bg-slate-50"><strong>${escapeHtml(p.first_name)} ${escapeHtml(p.last_name)}</strong><small class="block text-slate-500">${escapeHtml(p.contact_number || p.email || 'No contact')}${p.admission_id ? ` · ${escapeHtml(p.admission_status_name)}` : ''}</small></button>`).join('') : '<p class="px-4 py-3 text-sm text-slate-500">No patients found.</p>';
+                    const patients = await request('search-patients', { params: { q: query, care_scope: patientSearchScope } });
+                    results.innerHTML = patients.length ? patients.map(p => `<button type="button" data-patient-id="${Number(p.patient_id)}" class="block w-full border-b px-4 py-3 text-left hover:bg-slate-50"><strong>${escapeHtml(p.first_name)} ${escapeHtml(p.last_name)}</strong><small class="block text-slate-500">${escapeHtml(p.contact_number || p.email || 'No contact')}${p.admission_id ? ` · ${escapeHtml(p.admission_status_name)}` : ''}</small></button>`).join('') : `<p class="px-4 py-3 text-sm text-slate-500">${patientSearchScope ? 'No current Emergency patients found.' : 'No registered patients found.'}</p>`;
                     results.classList.remove('hidden');
                 } catch (error) { results.innerHTML = `<p class="px-4 py-3 text-sm text-rose-600">${escapeHtml(error.message)}</p>`; results.classList.remove('hidden'); }
             }, 250);
@@ -895,7 +896,7 @@ function initializeNursePage(event) {
             const button = event.target.closest('[data-patient-id]');
             if (!button) return;
             try {
-                renderSelected(await request('patient-details', { params: { id: button.dataset.patientId } }));
+                renderSelected(await request('patient-details', { params: { id: button.dataset.patientId, care_scope: patientSearchScope } }));
                 results.classList.add('hidden');
             } catch (error) { showNotice(error.message); }
         });

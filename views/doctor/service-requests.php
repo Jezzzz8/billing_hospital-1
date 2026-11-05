@@ -5,6 +5,7 @@ require_once __DIR__ . '/../../controllers/DoctorHelper.php';
 
 $doctorId = DoctorHelper::getCurrentDoctorId($pdo);
 $controller = new DoctorPortalController($pdo, $doctorId);
+$doctorCareScope = $controller->getCareScope();
 
 $admissionId = (int)($_GET['admission_id'] ?? 0);
 $admission = $admissionId ? $controller->getAdmissionDetails($admissionId) : null;
@@ -14,8 +15,14 @@ $assigned = $controller->getAssignedPatients();
 if (!$admission) {
     ?>
     <div class="mb-8">
-        <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Service Requests</h1>
-        <p class="mt-1 text-sm text-slate-500">Select an admission to request medications, labs, or procedures.</p>
+        <h1 class="text-2xl font-bold text-slate-900 tracking-tight">
+            <?= $doctorCareScope === 'ER' ? 'Emergency Charges & Requests' : 'Service Requests' ?>
+        </h1>
+        <p class="mt-1 text-sm text-slate-500">
+            <?= $doctorCareScope === 'ER'
+                ? 'Select an emergency patient to request ancillary items or Pharmacy medicines.'
+                : 'Select an admission to request medications, labs, or procedures.' ?>
+        </p>
     </div>
 
     <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -89,7 +96,15 @@ if (!$admission) {
 
     <div class="lg:col-span-1">
         <div class="bg-white rounded-xl border border-slate-200 p-6">
-            <h3 class="text-base font-semibold text-slate-900 mb-4">New Service Request</h3>
+            <h3 class="text-base font-semibold text-slate-900 mb-4">
+                <?= $doctorCareScope === 'ER' ? 'New Emergency Request' : 'New Service Request' ?>
+            </h3>
+            <?php if ($doctorCareScope === 'ER'): ?>
+                <p class="mb-4 text-xs leading-relaxed text-slate-500">
+                    Charges are added when the department records fulfilled quantities. Ancillary items are handled by the Emergency Department;
+                    medicines are sent to Pharmacy for fulfillment.
+                </p>
+            <?php endif; ?>
 
             <form id="requestForm" class="space-y-4">
                 <input type="hidden" name="admission_id" value="<?= (int)$admissionId ?>">
@@ -211,6 +226,43 @@ if (!$admission) {
             <?php endif; ?>
         </div>
     </div>
+    <?php if ($doctorCareScope === 'ER' && !empty($admission['medicine_return_items'])): ?>
+        <div class="lg:col-span-3 rounded-xl border border-amber-200 bg-amber-50 p-5">
+            <h3 class="font-semibold text-amber-950">Return unused Pharmacy medicines</h3>
+            <p class="mt-1 text-xs text-amber-800">Send returned quantities to Pharmacy for confirmation and billing credit.</p>
+            <div class="mt-4 grid gap-3 md:grid-cols-2">
+                <?php foreach ($admission['medicine_return_items'] as $medicine): ?>
+                    <form data-medicine-return-form
+                          class="rounded-lg border border-amber-200 bg-white p-4"
+                          data-fulfillment-item-id="<?= (int)$medicine['fulfillment_item_id'] ?>">
+                        <p class="text-sm font-medium text-slate-900"><?= htmlspecialchars($medicine['item_name']) ?></p>
+                        <p class="mt-1 text-xs text-slate-500">
+                            Returnable: <?= (int)$medicine['returnable_quantity'] ?>
+                            <?= htmlspecialchars($medicine['unit_of_measure'] ?? 'unit') ?>
+                        </p>
+                        <div class="mt-3 flex flex-wrap items-end gap-2">
+                            <label class="min-w-24 flex-1 text-xs font-medium text-slate-600">
+                                Quantity
+                                <input name="quantity" type="number" min="1"
+                                       max="<?= (int)$medicine['returnable_quantity'] ?>"
+                                       value="<?= (int)$medicine['returnable_quantity'] ?>" required
+                                       class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                            </label>
+                            <label class="min-w-40 flex-[2] text-xs font-medium text-slate-600">
+                                Reason
+                                <input name="reason" type="text" value="Unused emergency medicine"
+                                       class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                            </label>
+                            <button type="submit"
+                                    class="rounded-lg bg-amber-700 px-3 py-2 text-xs font-semibold text-white hover:bg-amber-800">
+                                Send return to Pharmacy
+                            </button>
+                        </div>
+                    </form>
+                <?php endforeach; ?>
+            </div>
+        </div>
+    <?php endif; ?>
 </div>
 
 <script>
@@ -327,6 +379,36 @@ if (!$admission) {
             btn.disabled = false;
             label.textContent = 'Submit Request';
         }
+    });
+
+    document.querySelectorAll('[data-medicine-return-form]').forEach((form) => {
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const button = form.querySelector('button[type="submit"]');
+            button.disabled = true;
+            button.textContent = 'Sending…';
+            try {
+                const response = await axios.post(
+                    `${baseUrl}/api/doctors.php?operation=request-medicine-return`,
+                    {
+                        admission_id: <?= (int)$admissionId ?>,
+                        fulfillment_item_id: Number(form.dataset.fulfillmentItemId),
+                        quantity: form.querySelector('[name="quantity"]').value,
+                        reason: form.querySelector('[name="reason"]').value,
+                    },
+                    { headers: { 'Content-Type': 'application/json' } }
+                );
+                if (!response.data?.success) {
+                    throw new Error(response.data?.message || 'Could not send return to Pharmacy.');
+                }
+                showAlert('success', response.data.message || 'Medicine return sent to Pharmacy.');
+                setTimeout(() => location.reload(), 800);
+            } catch (error) {
+                showAlert('error', error.response?.data?.message || error.message || 'Could not send return to Pharmacy.');
+                button.disabled = false;
+                button.textContent = 'Send return to Pharmacy';
+            }
+        });
     });
 
     document.querySelectorAll('[data-cancel-request]').forEach((button) => {

@@ -22,6 +22,14 @@ $sidebarSections = [
     ],
 ];
 
+if (($doctorCareScope ?? '') === 'ER') {
+    $sidebarSections['Patient Care'] = array_values(array_filter(
+        $sidebarSections['Patient Care'],
+        static fn(array $item): bool => $item['label'] !== 'Consultations'
+    ));
+    unset($sidebarSections['Discharge']);
+}
+
 $currentPage = $_GET['page'] ?? 'doctor';
 
 require __DIR__ . '/../partials/sidebar.php';

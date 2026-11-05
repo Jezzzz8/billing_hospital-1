@@ -11,7 +11,7 @@ class DoctorController
     public function getAll(): array
     {
         $doctors = $this->pdo->query(
-            'SELECT d.doctor_id, d.user_id, d.license_number, d.consultation_fee,
+            'SELECT d.doctor_id, d.user_id, d.license_number, d.consultation_fee, d.care_scope,
                     d.is_active AS doctor_active,
                     u.username, u.first_name, u.last_name, u.email,
                     u.contact_number,
@@ -88,13 +88,14 @@ class DoctorController
             $userId = (int)$this->pdo->lastInsertId();
 
             $stmt = $this->pdo->prepare(
-                'INSERT INTO `doctor` (user_id, license_number, consultation_fee, is_active)
-                 VALUES (?, ?, ?, 1)'
+                'INSERT INTO `doctor` (user_id, license_number, consultation_fee, care_scope, is_active)
+                 VALUES (?, ?, ?, ?, 1)'
             );
             $stmt->execute([
                 $userId,
                 $data['license_number'],
                 (float)$data['consultation_fee'],
+                $data['care_scope'],
             ]);
             $doctorId = (int)$this->pdo->lastInsertId();
 
@@ -154,11 +155,12 @@ class DoctorController
             ]);
 
             $stmt = $this->pdo->prepare(
-                'UPDATE `doctor` SET license_number = ?, consultation_fee = ? WHERE doctor_id = ?'
+                'UPDATE `doctor` SET license_number = ?, consultation_fee = ?, care_scope = ? WHERE doctor_id = ?'
             );
             $stmt->execute([
                 $data['license_number'],
                 (float)$data['consultation_fee'],
+                $data['care_scope'],
                 $doctorId,
             ]);
 
@@ -300,6 +302,10 @@ class DoctorController
 
         $fee = $data['consultation_fee'] ?? '';
         if ($fee === '' || !is_numeric($fee) || (float)$fee < 0) $errors['consultation_fee'] = 'Enter a valid consultation fee.';
+
+        if (!in_array($data['care_scope'] ?? '', ['ER', 'INPATIENT'], true)) {
+            $errors['care_scope'] = 'Select whether this doctor serves ER or inpatient care.';
+        }
 
         $primaryId = (int)($data['primary_specialization_id'] ?? 0);
         $specIds   = array_map('intval', $data['specializations'] ?? []);

@@ -6,28 +6,36 @@ require_once __DIR__ . '/../../controllers/NurseController.php';
 $controller = new NurseController($pdo);
 $admissions = $controller->getAdmissions();
 
-$activeCount     = count(array_filter($admissions, fn($a) => (int)$a['admission_id'] && (int)$a['admission_status_id'] !== 2));
+$activeCount     = count(array_filter($admissions, static fn(array $a): bool =>
+    empty($a['discharge_datetime']) && ($a['admission_status_name'] ?? '') !== 'Discharged'
+));
 $dischargedCount = count($admissions) - $activeCount;
 ?>
 
 <div class="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
     <div>
-        <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Admissions</h1>
-        <p class="mt-1 text-sm text-slate-500">All patient admissions and their current status.</p>
+        <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Active Patients</h1>
+        <p class="mt-1 text-sm text-slate-500">All patient encounters and their current status.</p>
     </div>
-    <a href="<?= BASE_URL ?>/index.php?page=nurse-admission-create"
-       class="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
-        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
-        </svg>
-        New Admission
-    </a>
+    <div class="flex flex-col sm:flex-row gap-2">
+        <a href="<?= BASE_URL ?>/index.php?page=nurse-emergency-create"
+           class="inline-flex items-center justify-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-800 hover:bg-rose-100">
+            Emergency Patient
+        </a>
+        <a href="<?= BASE_URL ?>/index.php?page=nurse-admission-create"
+           class="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
+            </svg>
+            New Admission
+        </a>
+    </div>
 </div>
 
 
 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6 max-w-xl">
     <div class="bg-white rounded-xl border border-slate-200 p-5">
-        <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Active Admissions</p>
+        <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Active Patients</p>
         <p class="mt-2 text-2xl font-bold text-emerald-600"><?= $activeCount ?></p>
     </div>
     <div class="bg-white rounded-xl border border-slate-200 p-5">
@@ -82,7 +90,22 @@ $dischargedCount = count($admissions) - $activeCount;
             </thead>
             <tbody class="divide-y divide-slate-100">
                 <?php foreach ($admissions as $a):
-                    $isDischarged = (int)$a['admission_status_id'] === 2;
+                    $isDischarged = !empty($a['discharge_datetime'])
+                        || ($a['admission_status_name'] ?? '') === 'Discharged';
+                    $careScope = $a['care_scope'] ?? 'INPATIENT';
+                    $careScopeLabel = match ($careScope) {
+                        'ER' => 'ER encounter',
+                        'OUTPATIENT' => 'Outpatient encounter',
+                        default => 'Inpatient encounter',
+                    };
+                    $careScopeClass = match ($careScope) {
+                        'ER' => 'text-amber-700',
+                        'OUTPATIENT' => 'text-emerald-700',
+                        default => 'text-blue-700',
+                    };
+                    $canAdmitToInpatient = !$isDischarged
+                        && $careScope === 'ER'
+                        && ($a['room_type_name'] ?? '') === 'Emergency Bed';
                 ?>
                     <tr class="hover:bg-slate-50 admission-row"
                         data-search="<?= htmlspecialchars(strtolower($a['first_name'] . ' ' . $a['last_name'] . ' ' . ($a['room_number'] ?? ''))) ?>">
@@ -90,6 +113,9 @@ $dischargedCount = count($admissions) - $activeCount;
                         <td class="px-6 py-4">
                             <p class="font-semibold text-slate-900"><?= htmlspecialchars($a['first_name'] . ' ' . $a['last_name']) ?></p>
                             <p class="text-xs text-slate-500">#<?= (int)$a['admission_id'] ?></p>
+                            <p class="text-xs font-medium <?= $careScopeClass ?>">
+                                <?= htmlspecialchars($careScopeLabel) ?>
+                            </p>
                             <p class="mt-1 text-xs font-medium text-blue-700">Patient code: <?= htmlspecialchars($a['patient_code'] ?: 'Not assigned') ?></p>
                         </td>
 
@@ -130,9 +156,15 @@ $dischargedCount = count($admissions) - $activeCount;
                         <td class="px-6 py-4 text-right whitespace-nowrap">
                             <div class="inline-flex items-center gap-1.5">
                                 <?php if (!$isDischarged): ?>
+                                    <?php if ($canAdmitToInpatient): ?>
+                                        <a href="<?= BASE_URL ?>/index.php?page=nurse-admission-create&patient_id=<?= (int)$a['patient_id'] ?>"
+                                           class="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100">
+                                            Admit Patient
+                                        </a>
+                                    <?php endif; ?>
                                     <a href="<?= BASE_URL ?>/index.php?page=nurse-room-assignments&admission_id=<?= (int)$a['admission_id'] ?>"
                                        class="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100">
-                                        Manage
+                                        <?= ($a['admission_status_name'] ?? '') === 'Emergency' ? 'Manage Emergency' : 'Manage Admission' ?>
                                     </a>
                                 <?php else: ?>
                                     <span class="text-xs text-slate-400">

@@ -5,11 +5,15 @@ require_once __DIR__ . '/../../controllers/NurseController.php';
 
 $controller = new NurseController($pdo);
 $genders = $controller->getGenders();
+$initialName = trim((string)($_GET['name'] ?? ''));
+$initialNameParts = preg_split('/\s+/', $initialName, 2, PREG_SPLIT_NO_EMPTY) ?: [];
+$initialFirstName = $initialNameParts[0] ?? '';
+$initialLastName = $initialNameParts[1] ?? '';
 ?>
 
 <div class="mb-8">
     <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Register New Patient</h1>
-    <p class="mt-1 text-sm text-slate-500">Enter the patient's personal information to create a new record.</p>
+    <p class="mt-1 text-sm text-slate-500">Enter the patient's personal information, then continue to the appropriate care workflow.</p>
 </div>
 
 <div id="alert" class="hidden mb-5 rounded-lg px-4 py-3 text-sm border"></div>
@@ -20,6 +24,7 @@ $genders = $controller->getGenders();
             <div>
                 <label class="block text-sm font-medium text-slate-700 mb-1.5">First Name <span class="text-rose-500">*</span></label>
                 <input type="text" id="first_name" name="first_name" required
+                       value="<?= htmlspecialchars($initialFirstName) ?>"
                        class="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
                 <p class="mt-1.5 text-xs text-red-600 hidden" data-error-for="first_name"></p>
             </div>
@@ -27,6 +32,7 @@ $genders = $controller->getGenders();
             <div>
                 <label class="block text-sm font-medium text-slate-700 mb-1.5">Last Name <span class="text-rose-500">*</span></label>
                 <input type="text" id="last_name" name="last_name" required
+                       value="<?= htmlspecialchars($initialLastName) ?>"
                        class="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
                 <p class="mt-1.5 text-xs text-red-600 hidden" data-error-for="last_name"></p>
             </div>
@@ -229,7 +235,7 @@ document.getElementById('registerForm').addEventListener('submit', async functio
             alertEl.classList.remove('hidden');
 
             setTimeout(() => {
-                window.location.href = `${baseUrl}/index.php?page=nurse-admission-create&patient_id=${response.data.patient_id}`;
+                window.location.href = `${baseUrl}/index.php?page=nurse-emergency-create&patient_id=${response.data.patient_id}`;
             }, 1000);
         }
     } catch (err) {

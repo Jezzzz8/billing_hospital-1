@@ -4,10 +4,12 @@
 require_once __DIR__ . '/../../controllers/NurseController.php';
 
 $controller = new NurseController($pdo);
+$careScope = ($_GET['page'] ?? '') === 'nurse-emergency-create' ? 'ER' : 'INPATIENT';
 $genders = $controller->getGenders();
-$roomTypes = $controller->getRoomTypes();
-$availableRooms = $controller->getAvailableRooms();
-$doctors = $controller->getDoctors();
+$roomTypes = $controller->getRoomTypes($careScope);
+$emergencyRoomType = $careScope === 'ER' ? ($roomTypes[0] ?? null) : null;
+$availableRooms = $controller->getAvailableRooms(null, $careScope);
+$doctors = $controller->getDoctors($careScope);
 $availableBedsByType = [];
 foreach ($availableRooms as $room) {
     $typeId = (int)$room['room_type_id'];
@@ -15,34 +17,47 @@ foreach ($availableRooms as $room) {
 }
 
 $selectedPatientId = (int)($_GET['patient_id'] ?? 0);
-$selectedPatient = $selectedPatientId ? $controller->getPatientDetails($selectedPatientId) : null;
+$selectedPatient = $selectedPatientId
+    ? $controller->getPatientDetails($selectedPatientId)
+    : null;
 ?>
 
-<?php if ($selectedPatient && !empty($selectedPatient['current_admission'])): ?>
+<?php if ($selectedPatient && !empty($selectedPatient['current_admission'])
+    && ($careScope === 'ER' || ($selectedPatient['current_admission']['care_scope'] ?? '') !== 'ER')): ?>
     <div class="mb-8">
-        <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Patient Already Admitted</h1>
-        <p class="mt-1 text-sm text-slate-500">This patient already has an active admission. Manage the existing admission instead of creating another one.</p>
+        <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Patient Already Has an Active Encounter</h1>
+        <p class="mt-1 text-sm text-slate-500">Manage the existing encounter instead of creating another one.</p>
     </div>
     <div class="rounded-xl border border-amber-200 bg-amber-50 p-6">
         <p class="font-semibold text-amber-900">
             <?= htmlspecialchars($selectedPatient['first_name'] . ' ' . $selectedPatient['last_name']) ?>
-            already has active admission #<?= (int)$selectedPatient['current_admission']['admission_id'] ?>.
+            already has active <?= ($selectedPatient['current_admission']['care_scope'] ?? '') === 'ER' ? 'ER visit' : 'admission' ?>
+            #<?= (int)$selectedPatient['current_admission']['admission_id'] ?>.
         </p>
         <a href="<?= BASE_URL ?>/index.php?page=nurse-room-assignments&admission_id=<?= (int)$selectedPatient['current_admission']['admission_id'] ?>"
            class="mt-4 inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
-            Manage existing admission
+            Manage existing encounter
         </a>
     </div>
 <?php else: ?>
 <div class="mb-8">
-    <h1 class="text-2xl font-bold text-slate-900 tracking-tight">New Admission</h1>
-    <p class="mt-1 text-sm text-slate-500">Admit a patient, assign a room, and choose the attending doctor(s).</p>
+    <h1 class="text-2xl font-bold text-slate-900 tracking-tight"><?= $careScope === 'ER' ? 'Emergency Patient' : 'New Admission' ?></h1>
+    <p class="mt-1 text-sm text-slate-500">
+        <?= $careScope === 'ER'
+            ? 'Register an emergency visit, assign an Emergency Bed, and choose the Emergency Doctor(s).'
+            : 'Admit a patient, assign a room, and choose the Admission Doctor(s).' ?>
+    </p>
 </div>
 
 <div id="alert" class="hidden mb-5 rounded-lg px-4 py-3 text-sm border"></div>
 
 <div class="bg-white rounded-xl border border-slate-200 p-6 max-w-3xl">
-    <form id="admissionForm" method="POST" novalidate>
+    <?php if ($careScope === 'ER' && empty($availableRooms)): ?>
+        <div class="mb-5 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            No Emergency Bed is currently available. An ER visit cannot be created until an Emergency Bed has capacity.
+        </div>
+    <?php endif; ?>
+    <form id="admissionForm" method="POST" novalidate data-care-scope="<?= htmlspecialchars($careScope) ?>">
         <input type="hidden" name="patient_id" id="patient_id" value="<?= $selectedPatientId ?>">
 
         
@@ -63,36 +78,51 @@ $selectedPatient = $selectedPatientId ? $controller->getPatientDetails($selected
                 </div>
             <?php else: ?>
                 <div class="relative">
-                    <input type="text" id="patientSearch" placeholder="Search patient by name, contact, or email…"
+                    <input type="text" id="patientSearch"
+                           placeholder="<?= $careScope === 'ER' ? 'Search registered patient by name, contact, or email…' : 'Search current Emergency patients by name, contact, or email…' ?>"
+                           data-search-scope="<?= $careScope === 'INPATIENT' ? 'INPATIENT' : '' ?>"
                            class="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
                     <div id="patientResults" class="hidden absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-64 overflow-y-auto"></div>
                 </div>
-                <p class="mt-1.5 text-xs text-slate-500">Start typing to search for an existing patient.</p>
+                <p id="patientSearchHelp" class="mt-1.5 text-xs text-slate-500">
+                    <?= $careScope === 'ER'
+                        ? 'Search registered patient records to start an emergency visit.'
+                        : 'Search current Emergency patients or registered patients to readmit.' ?>
+                </p>
             <?php endif; ?>
             <p class="mt-1.5 text-xs text-red-600 hidden" data-error-for="patient_id"></p>
         </div>
 
         
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-5 mb-6">
+            <?php if ($careScope === 'ER'): ?>
+                <input type="hidden" name="admission_type" id="admission_type" value="Urgent">
+                <div>
+                    <span class="block text-sm font-medium text-slate-700 mb-1.5">Encounter Type</span>
+                    <p class="rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm font-medium text-amber-900">Emergency visit</p>
+                </div>
+            <?php else: ?>
             <div>
                 <label class="block text-sm font-medium text-slate-700 mb-1.5">Admission Type</label>
                 <select name="admission_type" id="admission_type"
                         class="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
-                    <option value="Emergency">Emergency</option>
                     <option value="Elective">Elective</option>
-                    <option value="Urgent">Urgent</option>
+                    <option value="Urgent" selected>Urgent</option>
                 </select>
                 <p class="mt-1.5 text-xs text-red-600 hidden" data-error-for="admission_type"></p>
             </div>
+            <?php endif; ?>
 
             <div class="sm:col-span-2">
                 <label class="block text-sm font-medium text-slate-700 mb-1.5">Chief Complaint</label>
-                <input type="text" name="chief_complaint" id="chief_complaint" placeholder="e.g. Chest pain and dizziness"
+                <input type="text" name="chief_complaint" id="chief_complaint"
+                       value="<?= htmlspecialchars((string)($selectedPatient['current_admission']['chief_complaint'] ?? '')) ?>"
+                       placeholder="e.g. Chest pain and dizziness"
                        class="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
             </div>
 
             <div class="sm:col-span-2">
-                <label class="block text-sm font-medium text-slate-700 mb-1.5">Admission Notes</label>
+                <label class="block text-sm font-medium text-slate-700 mb-1.5"><?= $careScope === 'ER' ? 'Emergency Notes' : 'Admission Notes' ?></label>
                 <textarea name="admission_notes" id="admission_notes" rows="2"
                           class="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"></textarea>
             </div>
@@ -108,8 +138,8 @@ $selectedPatient = $selectedPatientId ? $controller->getPatientDetails($selected
                 <span id="doctorCount" class="text-xs text-slate-500">0 selected</span>
             </div>
             <p class="text-xs text-slate-500 mb-3">
-                Patients assigned to a doctor appear on that doctor's dashboard, patient list,
-                service requests, and diagnosis pages.
+                <?= $careScope === 'ER' ? 'Emergency Doctors' : 'Admission Doctors' ?> assigned here appear on the doctor’s dashboard,
+                patient list, service requests, and diagnosis pages.
             </p>
 
             <?php if (empty($doctors)): ?>
@@ -119,7 +149,8 @@ $selectedPatient = $selectedPatientId ? $controller->getPatientDetails($selected
             <?php else: ?>
                 <div class="space-y-2 border border-slate-200 rounded-lg p-3 max-h-64 overflow-y-auto">
                     <?php foreach ($doctors as $d): ?>
-                        <label class="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 cursor-pointer transition">
+                        <label class="doctor-option flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 cursor-pointer transition"
+                               data-care-scope="<?= htmlspecialchars($d['care_scope']) ?>">
                             <input type="checkbox"
                                    name="doctor_ids[]"
                                    value="<?= (int)$d['doctor_id'] ?>"
@@ -129,7 +160,8 @@ $selectedPatient = $selectedPatientId ? $controller->getPatientDetails($selected
                                     Dr. <?= htmlspecialchars($d['first_name'] . ' ' . $d['last_name']) ?>
                                 </p>
                                 <p class="text-xs text-slate-500">
-                                    Consultation fee: ₱<?= number_format((float)$d['consultation_fee'], 2) ?>
+                                    <?= $careScope === 'ER' ? 'Emergency Doctor' : 'Admission Doctor' ?>
+                                    · Consultation fee: ₱<?= number_format((float)$d['consultation_fee'], 2) ?>
                                 </p>
                             </div>
                             <select name="doctor_roles[<?= (int)$d['doctor_id'] ?>]"
@@ -146,29 +178,67 @@ $selectedPatient = $selectedPatientId ? $controller->getPatientDetails($selected
 
         
         <div class="mb-6">
-            <label for="preferred_room_type_id" class="block text-sm font-medium text-slate-700 mb-2">Patient's preferred room type <span class="text-rose-500">*</span></label>
-            <select name="preferred_room_type_id" id="preferred_room_type_id" required
-                    class="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
-                <option value="">— Select preferred room type —</option>
-                <?php foreach ($roomTypes as $rt): ?>
-                    <?php $availableBeds = (int)($availableBedsByType[(int)$rt['room_type_id']] ?? 0); ?>
-                    <option value="<?= (int)$rt['room_type_id'] ?>"
-                            data-available-beds="<?= $availableBeds ?>"
-                            <?= $availableBeds === 0 ? 'disabled' : '' ?>>
-                        <?= htmlspecialchars($rt['room_type_name']) ?> · <?= $availableBeds ?> bed<?= $availableBeds === 1 ? '' : 's' ?> available · ₱<?= number_format((float)$rt['rate_per_day'], 2) ?>/<?= htmlspecialchars(['once' => 'once', 'hour' => 'hour', 'day' => 'day'][$rt['charge_interval']] ?? 'day') ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
+            <?php if ($careScope === 'ER'): ?>
+                <input type="hidden" name="preferred_room_type_id" id="preferred_room_type_id"
+                       value="<?= (int)($emergencyRoomType['room_type_id'] ?? 0) ?>">
+                <p class="block text-sm font-medium text-slate-700 mb-2">Emergency Bed</p>
+                <div class="rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm text-slate-700">
+                    Emergency Bed · <?= (int)($availableBedsByType[(int)($emergencyRoomType['room_type_id'] ?? 0)] ?? 0) ?> available
+                </div>
+            <?php else: ?>
+                <label for="preferred_room_type_id" class="block text-sm font-medium text-slate-700 mb-2">
+                    Patient's preferred room type <span class="text-rose-500">*</span>
+                </label>
+                <select name="preferred_room_type_id" id="preferred_room_type_id" required
+                        class="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                    <option value="">— Select preferred room type —</option>
+                    <?php foreach ($roomTypes as $rt): ?>
+                        <?php $availableBeds = (int)($availableBedsByType[(int)$rt['room_type_id']] ?? 0); ?>
+                        <option value="<?= (int)$rt['room_type_id'] ?>"
+                                data-available-beds="<?= $availableBeds ?>"
+                                <?= $availableBeds === 0 ? 'disabled' : '' ?>>
+                            <?= htmlspecialchars($rt['room_type_name']) ?> · <?= $availableBeds ?> bed<?= $availableBeds === 1 ? '' : 's' ?> available · ₱<?= number_format((float)$rt['rate_per_day'], 2) ?>/<?= htmlspecialchars(['once' => 'once', 'hour' => 'hour', 'day' => 'day'][$rt['charge_interval']] ?? 'day') ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            <?php endif; ?>
             <p class="mt-1.5 text-xs text-red-600 hidden" data-error-for="preferred_room_type_id"></p>
-            <label for="room_id" class="mt-4 block text-sm font-medium text-slate-700 mb-2">Specific room / ward bed <span class="text-rose-500">*</span></label>
-            <select name="room_id" id="room_id" required disabled
-                    class="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-50 disabled:text-slate-400">
-                <option value="">— Select a room type first —</option>
-            </select>
-            <p class="mt-1.5 text-xs text-red-600 hidden" data-error-for="room_id"></p>
-            <p id="roomAvailabilityMessage" class="mt-2 text-sm text-slate-600" aria-live="polite">
-                Choose a room type, then select the specific available room. Admission will not assign a different room automatically.
-            </p>
+            <div id="roomSelectionFields" <?= $careScope === 'ER' ? '' : 'hidden' ?>>
+                <label for="room_id" class="mt-4 block text-sm font-medium text-slate-700 mb-2">
+                    <?= $careScope === 'ER' ? 'Specific Emergency Bed' : 'Specific room / ward bed' ?>
+                    <span class="text-rose-500">*</span>
+                </label>
+                <select name="room_id" id="room_id" required
+                        class="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-50 disabled:text-slate-400">
+                    <option value="">— <?= $careScope === 'ER' ? 'No Emergency Beds available' : 'Select a room type first' ?> —</option>
+                    <?php foreach ($availableRooms as $room): ?>
+                        <?php if ((int)$room['available_beds'] <= 0) continue; ?>
+                        <?php
+                        $location = implode(' · ', array_filter([
+                            $room['building_name'] ?? '',
+                            $room['floor_level_name'] ?? '',
+                        ]));
+                        $roomLabel = 'Room ' . $room['room_number']
+                            . ' · ' . $room['room_type_name']
+                            . ($location !== '' ? ' · ' . $location : '')
+                            . ' · ' . (int)$room['available_beds'] . ' bed'
+                            . ((int)$room['available_beds'] === 1 ? '' : 's')
+                            . ' available · ₱' . number_format((float)$room['rate_per_day'], 2)
+                            . '/' . (['once' => 'once', 'hour' => 'hour', 'day' => 'day'][$room['charge_interval']] ?? 'day');
+                        ?>
+                        <option value="<?= (int)$room['room_id'] ?>"
+                                data-room-type-id="<?= (int)$room['room_type_id'] ?>">
+                            <?= htmlspecialchars($roomLabel) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+                <p class="mt-1.5 text-xs text-red-600 hidden" data-error-for="room_id"></p>
+                <p id="roomAvailabilityMessage" class="mt-2 text-sm text-slate-600" aria-live="polite">
+                    <?= $careScope === 'ER'
+                        ? 'Select the specific available Emergency Bed for this visit.'
+                        : 'Select a specific available room in the preferred room type.' ?>
+                </p>
+            </div>
         </div>
 
         <div class="flex items-center justify-end gap-3 pt-4 border-t border-slate-200">
@@ -178,7 +248,7 @@ $selectedPatient = $selectedPatientId ? $controller->getPatientDetails($selected
             </a>
             <button type="submit" id="submitBtn"
                     class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
-                <span id="submitLabel">Admit Patient</span>
+                <span id="submitLabel"><?= $careScope === 'ER' ? 'Create Emergency Patient' : 'Admit Patient' ?></span>
             </button>
         </div>
     </form>
@@ -191,6 +261,13 @@ $selectedPatient = $selectedPatientId ? $controller->getPatientDetails($selected
     const patientResults = document.getElementById('patientResults');
     const patientIdInput = document.getElementById('patient_id');
     let searchTimeout = null;
+    const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+    })[char]);
 
 
     const doctorCheckboxes = document.querySelectorAll('.doctor-checkbox');
@@ -200,14 +277,12 @@ $selectedPatient = $selectedPatientId ? $controller->getPatientDetails($selected
         if (doctorCountEl) doctorCountEl.textContent = n + ' selected';
     }
     doctorCheckboxes.forEach(cb => cb.addEventListener('change', updateDoctorCount));
-
-
     if (patientSearch) {
         patientSearch.addEventListener('input', function() {
             clearTimeout(searchTimeout);
             const q = this.value.trim();
 
-            if (q.length < 2) {
+            if (q.length === 0) {
                 patientResults.classList.add('hidden');
                 return;
             }
@@ -215,26 +290,40 @@ $selectedPatient = $selectedPatientId ? $controller->getPatientDetails($selected
             searchTimeout = setTimeout(async () => {
                 try {
                     const response = await axios.get(`${baseUrl}/api/nurses/get-patient.php`, {
-                        params: { q }
+                        params: {
+                            q,
+                                    care_scope: patientSearch.dataset.searchScope || undefined
+                        }
                     });
                     const patients = response.data.patients || [];
 
                     if (patients.length === 0) {
-                        patientResults.innerHTML = '<div class="px-4 py-3 text-sm text-slate-500">No patients found</div>';
+                        const message = patientSearch.dataset.searchScope
+                            ? 'No current Emergency or returning patients found'
+                            : 'No registered patients found';
+                        const registerLink = patientSearch.dataset.searchScope
+                            ? ''
+                            : `<a class="block border-t border-slate-100 px-4 py-3 text-sm font-medium text-blue-700 hover:bg-blue-50" href="${baseUrl}/index.php?page=nurse-patient-register&name=${encodeURIComponent(q)}">Register a new patient using “${escapeHtml(q)}”</a>`;
+                        patientResults.innerHTML = `<div class="px-4 py-3 text-sm text-slate-500">${message}</div>${registerLink}`;
                     } else {
                         patientResults.innerHTML = patients.map(p => `
                             <button type="button" class="patient-option w-full text-left px-4 py-3 hover:bg-slate-50 border-b border-slate-100 last:border-b-0"
-                                    data-id="${p.patient_id}" data-name="${p.first_name} ${p.last_name}">
-                                <p class="font-medium text-slate-900">${p.first_name} ${p.last_name}</p>
-                                <p class="text-xs text-slate-500">${p.contact_number || p.email || 'No contact'}</p>
-                                ${p.admission_id ? '<span class="text-xs text-amber-600">Already admitted</span>' : ''}
-                            </button>
-                        `).join('');
+                                            data-id="${p.patient_id}" data-name="${p.first_name} ${p.last_name}"
+                                            data-active-scope="${p.care_scope || ''}">
+                                        <p class="font-medium text-slate-900">${p.first_name} ${p.last_name}</p>
+                                        <p class="text-xs text-slate-500">${p.patient_code || ''} ${p.contact_number || p.email || 'No contact'}</p>
+                                        ${p.admission_id ? `<span class="text-xs text-amber-600">Current ${p.care_scope === 'ER' ? 'Emergency visit' : 'inpatient admission'}</span>` : '<span class="text-xs text-emerald-700">Available to register</span>'}
+                                    </button>
+                                `).join('');
                     }
                     patientResults.classList.remove('hidden');
 
                     patientResults.querySelectorAll('.patient-option').forEach(btn => {
                         btn.addEventListener('click', function() {
+                            if (this.dataset.activeScope === 'INPATIENT') {
+                                patientResults.innerHTML = '<div class="px-4 py-3 text-sm text-amber-800">This patient already has an active inpatient admission. Manage that admission from Active Patient.</div>';
+                                return;
+                            }
                             const id = this.dataset.id;
                             const name = this.dataset.name;
                             patientIdInput.value = id;
@@ -257,11 +346,11 @@ $selectedPatient = $selectedPatientId ? $controller->getPatientDetails($selected
                         });
                     });
                 } catch (err) {
-                    console.error(err);
+                    patientResults.innerHTML = `<div class="px-4 py-3 text-sm text-rose-600">${err.response?.data?.message || 'Could not search patients.'}</div>`;
+                    patientResults.classList.remove('hidden');
                 }
             }, 300);
         });
-
 
         document.addEventListener('click', function(e) {
             if (!patientSearch.contains(e.target) && !patientResults.contains(e.target)) {
@@ -273,35 +362,40 @@ $selectedPatient = $selectedPatientId ? $controller->getPatientDetails($selected
 
     const preferredRoomType = document.getElementById('preferred_room_type_id');
     const roomSelect = document.getElementById('room_id');
+    const roomSelectionFields = document.getElementById('roomSelectionFields');
     const roomAvailabilityMessage = document.getElementById('roomAvailabilityMessage');
-    const availableRooms = <?= json_encode(
-        array_values(array_filter($availableRooms, static fn(array $room): bool => (int)$room['available_beds'] > 0)),
-        JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT
-    ) ?>;
+    const careScope = document.getElementById('admissionForm').dataset.careScope;
+    const roomPlaceholder = roomSelect.options[0];
+    const roomOptions = Array.from(roomSelect.options).slice(1);
     function updateAvailableRoomOptions() {
         const selectedTypeId = preferredRoomType.value;
-        const matchingRooms = availableRooms.filter(room => String(room.room_type_id) === selectedTypeId);
-        roomSelect.replaceChildren(new Option(
-            selectedTypeId ? '— Select a specific available room —' : '— Select a room type first —',
-            ''
-        ));
-        matchingRooms.forEach(room => {
-            const location = [room.building_name, room.floor_level_name].filter(Boolean).join(' · ');
-            const beds = Number(room.available_beds);
-            const label = `Room ${room.room_number}${location ? ` · ${location}` : ''} · ${beds} bed${beds === 1 ? '' : 's'} available · ₱${Number(room.rate_per_day).toFixed(2)}/${room.charge_interval}`;
-            roomSelect.add(new Option(label, String(room.room_id)));
-        });
-        roomSelect.disabled = matchingRooms.length === 0;
+        roomSelectionFields.hidden = selectedTypeId === '';
+        const matchingRooms = roomOptions.filter(option =>
+            selectedTypeId !== '' && option.dataset.roomTypeId === selectedTypeId
+        );
+        roomPlaceholder.textContent = matchingRooms.length > 0
+            ? '— Select a specific available room —'
+            : (selectedTypeId
+                ? (careScope === 'ER'
+                    ? '— No Emergency Beds available —'
+                    : '— No available beds for this room type —')
+                : '— Select a room type first —');
+        roomSelect.replaceChildren(roomPlaceholder, ...matchingRooms);
+        roomSelect.disabled = selectedTypeId === '' || matchingRooms.length === 0;
         roomSelect.value = '';
         return matchingRooms.length;
     }
 
     preferredRoomType.addEventListener('change', function() {
-        const selected = this.options[this.selectedIndex];
-        const preferredBeds = Number(selected.dataset.availableBeds || 0);
+        const selected = this.options?.[this.selectedIndex];
+        const preferredBeds = Number(selected?.dataset.availableBeds || 0);
         const roomsAvailable = updateAvailableRoomOptions();
 
-        if (!this.value) {
+        if (careScope === 'ER') {
+            roomAvailabilityMessage.textContent = roomsAvailable > 0
+                ? 'Select the specific available Emergency Bed for this visit.'
+                : 'No Emergency Beds are currently available.';
+        } else if (!this.value) {
             roomAvailabilityMessage.textContent = 'Choose a room type, then select the specific available room. Admission will not assign a different room automatically.';
         } else if (preferredBeds > 0 && roomsAvailable > 0) {
             roomAvailabilityMessage.textContent = `${roomsAvailable} room(s) have available beds in this room type. Select the exact room above.`;
@@ -309,6 +403,8 @@ $selectedPatient = $selectedPatientId ? $controller->getPatientDetails($selected
             roomAvailabilityMessage.textContent = 'No beds are currently available in this room type. Choose another type with availability.';
         }
     });
+
+    preferredRoomType.dispatchEvent(new Event('change', { bubbles: true }));
 
 
     document.getElementById('admissionForm').addEventListener('submit', async function(e) {
@@ -371,11 +467,14 @@ $selectedPatient = $selectedPatientId ? $controller->getPatientDetails($selected
         }
 
         btn.disabled = true;
-        label.textContent = 'Admitting…';
+        label.textContent = <?= json_encode($careScope === 'ER' ? 'Creating ER visit…' : 'Admitting…') ?>;
         alertEl.classList.add('hidden');
 
         try {
-            const response = await axios.post(`${baseUrl}/api/nurses/admission-create.php`, data, {
+            const endpoint = <?= json_encode($careScope === 'ER'
+                ? BASE_URL . '/api/nurse.php?operation=create-er-admission'
+                : BASE_URL . '/api/nurses/admission-create.php') ?>;
+            const response = await axios.post(endpoint, data, {
                 headers: { 'Content-Type': 'application/json' }
             });
 
@@ -403,7 +502,7 @@ $selectedPatient = $selectedPatientId ? $controller->getPatientDetails($selected
             alertEl.classList.remove('hidden');
         } finally {
             btn.disabled = false;
-            label.textContent = 'Admit Patient';
+            label.textContent = <?= json_encode($careScope === 'ER' ? 'Create Emergency Patient' : 'Admit Patient') ?>;
         }
     });
 })();

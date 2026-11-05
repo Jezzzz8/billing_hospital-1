@@ -17,14 +17,14 @@ if (empty($_SESSION['user']) || !in_array((int)$_SESSION['user']['role_id'], [1,
 
 $q = trim($_GET['q'] ?? '');
 
-if (strlen($q) < 2) {
+if ($q === '') {
     echo json_encode(['success' => true, 'patients' => []]);
     exit;
 }
 
 try {
     $controller = new NurseController($pdo);
-    $patients = $controller->searchPatients($q);
+    $patients = $controller->searchPatients($q, $_GET['care_scope'] ?? null);
     echo json_encode(['success' => true, 'patients' => $patients]);
 } catch (Throwable $e) {
     error_log('[api/nurses/get-patient] ' . $e->getMessage());

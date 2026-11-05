@@ -18,6 +18,7 @@ if (empty($_SESSION['user'])) {
 $currentUser = $_SESSION['user'];
 $fullName    = trim($currentUser['first_name'] . ' ' . $currentUser['last_name']);
 $roleId      = (int)$currentUser['role_id'];
+$doctorCareScope = null;
 
 $defaultPage = match ($roleId) {
     1 => 'dashboard',
@@ -79,6 +80,7 @@ $allowed = [
         'nurse-patient-search',
         'nurse-patient-register',
         'nurse-admission-create',
+        'nurse-emergency-create',
         'nurse-admissions',
         'nurse-fulfillment-receipts',
         'nurse-medicine-intakes',
@@ -100,7 +102,6 @@ if (!in_array($page, $allowed[$roleId] ?? [], true)) {
     echo 'Access denied. Requested page: ' . htmlspecialchars($page);
     exit;
 }
-
 $layout = match ($roleId) {
     1 => 'admin',
     2 => 'doctor',
@@ -170,6 +171,7 @@ $pageTitle = match ($page) {
     'department-queue'        => 'Request Queue',
     'department-fulfillment'  => 'Fulfillment',
     'nurse-fulfillment-receipts' => 'Fulfillment Receipts',
+    'nurse-emergency-create' => 'Emergency Patient',
     default                   => $pageTitle,
 };
 
@@ -222,6 +224,18 @@ foreach ($jsCandidates as $relPath) {
 $currentPage = $page;
 
 require_once __DIR__ . '/config/connection.php';
+
+if ($roleId === 2) {
+    $doctorScopeStmt = $pdo->prepare('SELECT care_scope FROM `doctor` WHERE user_id = ? LIMIT 1');
+    $doctorScopeStmt->execute([(int)$currentUser['user_id']]);
+    $doctorCareScope = $doctorScopeStmt->fetchColumn() ?: null;
+}
+if ($roleId === 2 && $doctorCareScope === 'ER'
+    && in_array($page, ['doctor-consultations', 'doctor-discharge-ready'], true)) {
+    http_response_code(403);
+    echo 'Access denied. This page is only available to Admission Doctors.';
+    exit;
+}
 
 if (isset($_GET['partial']) && $_GET['partial'] === '1') {
     header('Content-Type: text/html; charset=UTF-8');

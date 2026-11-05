@@ -60,7 +60,9 @@ try {
                 'data' => [
                     'stats' => $controller->getDashboardStats(),
                     'patients' => $controller->getAssignedPatients(),
-                    'ready_for_discharge' => $controller->getReadyForDischarge(),
+                    'ready_for_discharge' => $controller->getCareScope() === 'INPATIENT'
+                        ? $controller->getReadyForDischarge()
+                        : [],
                 ],
             ]);
             break;

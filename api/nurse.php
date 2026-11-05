@@ -57,12 +57,18 @@ try {
             break;
 
         case 'search-patients':
-            echo json_encode(['success' => true, 'data' => $controller->searchPatients($_GET['q'] ?? '')]);
+            echo json_encode([
+                'success' => true,
+                'data' => $controller->searchPatients(
+                    $_GET['q'] ?? '',
+                    $_GET['care_scope'] ?? null
+                ),
+            ]);
             break;
 
         case 'patient-details':
             $id = (int)($_GET['id'] ?? 0);
-            $patient = $controller->getPatientDetails($id);
+            $patient = $controller->getPatientDetails($id, $_GET['care_scope'] ?? null);
             if ($patient === null) {
                 http_response_code(404);
                 echo json_encode(['success' => false, 'message' => 'Patient not found.']);
@@ -77,6 +83,10 @@ try {
 
         case 'create-admission':
             $controller->createAdmission();
+            break;
+
+        case 'create-er-admission':
+            $controller->createAdmission('ER');
             break;
 
         case 'admissions':

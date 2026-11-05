@@ -300,6 +300,7 @@ document.addEventListener("spa:page-loaded", async (event) => {
 
   let currentStatementId = null;
   let currentStatement = null;
+  let liveRefreshInProgress = false;
 
   document.querySelectorAll(".manage-tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -335,6 +336,17 @@ document.addEventListener("spa:page-loaded", async (event) => {
         showAlert(data.message || "Could not load statement.", "error");
         return;
       }
+
+      const liveRefreshTimer = window.setInterval(async () => {
+        if (!currentStatementId || manageModal.classList.contains("hidden") || liveRefreshInProgress) return;
+        liveRefreshInProgress = true;
+        try {
+          await loadStatement(currentStatementId);
+        } finally {
+          liveRefreshInProgress = false;
+        }
+      }, 60_000);
+      event.detail.signal?.addEventListener("abort", () => window.clearInterval(liveRefreshTimer), { once: true });
       currentStatement = data.data;
       renderStatement(currentStatement);
       patchOuterRow(currentStatement);

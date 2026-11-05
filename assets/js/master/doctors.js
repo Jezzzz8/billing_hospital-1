@@ -159,6 +159,7 @@ document.addEventListener("spa:page-loaded", async (event) => {
       contact_number: document.getElementById("contact_number").value.trim(),
       license_number: document.getElementById("license_number").value.trim(),
       consultation_fee: document.getElementById("consultation_fee").value,
+      care_scope: document.getElementById("care_scope").value,
       specializations: specializations,
       primary_specialization_id: primarySelect?.value
         ? parseInt(primarySelect.value, 10)

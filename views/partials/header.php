@@ -21,5 +21,6 @@ $pageScriptIsModule = $pageScriptIsModule ?? false;
       data-page-module="<?= !empty($pageScriptIsModule) ? '1' : '0' ?>"
       data-user-id="<?= (int)($_SESSION['user']['user_id'] ?? 0) ?>"
       data-user-role="<?= (int)($_SESSION['user']['role_id'] ?? 0) ?>"
+      data-doctor-care-scope="<?= htmlspecialchars($doctorCareScope ?? '') ?>"
       data-department-id="<?= (int)($_SESSION['user']['department_id'] ?? 0) ?>"
       class="min-h-screen bg-slate-100 font-sans antialiased">

@@ -48,7 +48,7 @@ class BillingController
         if (!$statement) return null;
 
         $stmt = $this->pdo->prepare(
-            'SELECT c.charge_id, c.charge_item_id, c.quantity, c.actual_price, c.source_type,
+            'SELECT c.charge_id, c.charge_item_id, c.quantity, c.actual_price, c.source_type, c.care_scope,
                     c.charge_datetime, c.notes,
                     ci.item_code, ci.item_name, ci.unit_of_measure,
                     (c.quantity * c.actual_price) AS line_total
@@ -198,6 +198,25 @@ class BillingController
         $item = $stmt->fetch();
         if (!$item) $this->json(404, ['success' => false, 'message' => 'Charge item not found or inactive.']);
         $isEmergencyCharge = $item['category_name'] === 'Emergency Room';
+        $scopeStmt = $this->pdo->prepare(
+            'SELECT a.care_scope
+             FROM `billing_statement` bs
+             INNER JOIN `admission` a ON a.admission_id = bs.admission_id
+             WHERE bs.statement_id = ? LIMIT 1'
+        );
+        $scopeStmt->execute([$id]);
+        $statementScope = (string)$scopeStmt->fetchColumn();
+        if (!in_array($statementScope, ['ER', 'INPATIENT'], true)) {
+            $this->json(409, ['success' => false, 'message' => 'This admission has no valid billing scope.']);
+        }
+        if (($isEmergencyCharge ? 'ER' : 'INPATIENT') !== $statementScope) {
+            $this->json(409, [
+                'success' => false,
+                'message' => $isEmergencyCharge
+                    ? 'Emergency Room charges are only allowed for ER patients.'
+                    : 'Regular admission charges are only allowed for admitted patients.',
+            ]);
+        }
         if ($interval !== 'once' && !$isEmergencyCharge) {
             $this->json(422, ['success' => false, 'message' => 'Hourly or daily billing intervals are available only for Emergency Room charges.']);
         }
@@ -250,8 +269,8 @@ class BillingController
                     (statement_id, charge_item_id, quantity, actual_price, charge_interval,
                      charge_datetime, processed_by_user_id, notes,
                      service_start_date, service_end_date, service_start_datetime,
-                     service_end_datetime, source_type)
-                     VALUES (?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?)'
+                     service_end_datetime, source_type, care_scope)
+                     VALUES (?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?)'
             );
             $stmt->execute([
                 $id,
@@ -266,6 +285,7 @@ class BillingController
                 $serviceStartDatetime,
                 $serviceEndDatetime,
                 $isEmergencyCharge ? 'ER' : 'MANUAL',
+                $statementScope,
             ]);
 
             (new ChargeSyncService($this->pdo))->syncStatement($id);

@@ -225,9 +225,17 @@
                 page = 'doctor-patients';
             }
         } else if (eventName === 'admission.discharged') {
-            page = userRole === 3 ? 'nurse-discharge-records' : 'doctor-discharge-ready';
+            page = userRole === 3
+                ? 'nurse-discharge-records'
+                : document.body.dataset.doctorCareScope === 'ER'
+                    ? 'doctor-patients'
+                    : 'doctor-discharge-ready';
         } else if (eventName === 'discharge.confirmed') {
-            page = userRole === 3 ? 'nurse-discharge-ready' : 'doctor-discharge-ready';
+            page = userRole === 3
+                ? 'nurse-discharge-ready'
+                : document.body.dataset.doctorCareScope === 'ER'
+                    ? 'doctor-patients'
+                    : 'doctor-discharge-ready';
         } else if (['billing.charge.added', 'billing.charge.removed', 'billing.payment.added',
             'billing.payment.removed', 'billing.statement.created', 'billing.statement.updated'].includes(eventName)) {
             if (userRole === 4) {
@@ -252,7 +260,9 @@
                 : userRole === 4
                     ? 'cashier-statements'
                     : userRole === 2
-                        ? 'doctor-discharge-ready'
+                        ? document.body.dataset.doctorCareScope === 'ER'
+                            ? 'doctor-patients'
+                            : 'doctor-discharge-ready'
                         : 'nurse-discharge-ready';
             if (userRole === 5 && requestId) params.request_id = requestId;
         } else if (eventName === 'master.updated' && userRole === 1) {
@@ -292,6 +302,10 @@
     }
 
     function pageAllowedForRole(page, role) {
+        if (role === 2 && document.body.dataset.doctorCareScope === 'ER'
+            && ['doctor-consultations', 'doctor-discharge-ready'].includes(page)) {
+            return false;
+        }
         const allowedPages = {
             1: ['dashboard', 'users', 'users-create', 'doctors', 'patients', 'billing', 'reports',
                 'gender', 'role', 'room-status', 'admission-status', 'billing-status', 'payment-type',
@@ -299,7 +313,8 @@
                 'floor-level', 'room-type', 'room', 'department', 'department-requests', 'admin-receipt'],
             2: ['doctor', 'doctor-patients', 'doctor-consultations', 'doctor-diagnosis-record',
                 'doctor-service-requests', 'doctor-discharge-ready'],
-            3: ['nurse', 'nurse-patient-search', 'nurse-patient-register', 'nurse-admission-create',
+            3: ['nurse', 'nurse-patient-search', 'nurse-patient-register', 'nurse-emergency-create',
+                'nurse-admission-create',
                 'nurse-admissions', 'nurse-fulfillment-receipts', 'nurse-medicine-intakes',
                 'nurse-room-assignments', 'nurse-room-board', 'nurse-discharge-ready',
                 'nurse-discharge-records'],

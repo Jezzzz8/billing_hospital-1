@@ -7,6 +7,11 @@ $controller = new NurseController($pdo);
 $admissionId = (int)($_GET['admission_id'] ?? 0);
 
 $admission = $admissionId > 0 ? $controller->getPatientByAdmission($admissionId) : null;
+$requestedCareScope = $_GET['care_scope'] ?? 'INPATIENT';
+$isEmergency = $admission
+    ? ($admission['status_name'] ?? '') === 'Emergency'
+    : $requestedCareScope === 'ER';
+$careScope = $isEmergency ? 'ER' : 'INPATIENT';
 $preferredRoomTypeName = '';
 if ($admission && preg_match('/Preferred room type:\s*([^\.\r\n]+)/', (string)($admission['notes'] ?? ''), $matches)) {
     $preferredRoomTypeName = trim($matches[1]);
@@ -37,26 +42,47 @@ if ($admission) {
     $transferHistory = $controller->getRoomTransferHistory($admissionId);
 }
 
-$availableRooms  = $controller->getAvailableRooms();
-$roomTypes       = $controller->getRoomTypes();
+$availableRooms  = $controller->getAvailableRooms(null, $careScope);
+$roomTypes       = $controller->getRoomTypes($careScope);
 
 
-$allDoctors      = $controller->getDoctors();
+$allDoctors      = $controller->getDoctors($admission ? $careScope : null);
 $assignedDoctors = $admission ? $controller->getAdmissionDoctors($admissionId) : [];
 
 
 if (!$admission) {
-    $admissions = $controller->getAdmissions();
+    $admissions = array_values(array_filter(
+        $controller->getAdmissions(),
+        static fn(array $item): bool => $isEmergency
+            ? ($item['admission_status_name'] ?? '') === 'Emergency'
+                && ($item['room_type_name'] ?? '') === 'Emergency Bed'
+                && empty($item['discharge_datetime'])
+                && ($item['admission_status_name'] ?? '') !== 'Discharged'
+            : ($item['admission_status_name'] ?? '') !== 'Emergency'
+                && empty($item['discharge_datetime'])
+                && ($item['admission_status_name'] ?? '') !== 'Discharged'
+    ));
     ?>
     <div class="mb-8">
-        <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Manage Admission</h1>
+        <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Room Assignments</h1>
         <p class="mt-1 text-sm text-slate-500">
             <?php if ($admissionId > 0): ?>
-                Admission #<?= $admissionId ?> was not found or has been discharged.
+                <?= $isEmergency ? 'Emergency patient' : 'Admission' ?> #<?= $admissionId ?> was not found or has been discharged.
             <?php else: ?>
-                Select an admission to manage its room and doctors.
+                <?= $isEmergency ? 'Select an Emergency patient to manage Emergency Beds and doctors.' : 'Select an admitted patient to manage inpatient rooms and doctors.' ?>
             <?php endif; ?>
         </p>
+    </div>
+
+    <div class="mb-4 flex gap-2">
+        <a href="<?= BASE_URL ?>/index.php?page=nurse-room-assignments&care_scope=INPATIENT"
+           class="rounded-lg px-4 py-2 text-sm font-medium <?= !$isEmergency ? 'bg-blue-600 text-white' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50' ?>">
+            Inpatient Admissions
+        </a>
+        <a href="<?= BASE_URL ?>/index.php?page=nurse-room-assignments&care_scope=ER"
+           class="rounded-lg px-4 py-2 text-sm font-medium <?= $isEmergency ? 'bg-amber-600 text-white' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50' ?>">
+            Emergency Patients
+        </a>
     </div>
 
     <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -65,8 +91,8 @@ if (!$admission) {
                 <thead class="bg-slate-50 border-b border-slate-200">
                     <tr>
                         <th class="text-left px-6 py-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide">Patient</th>
-                        <th class="text-left px-6 py-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide">Room</th>
-                        <th class="text-left px-6 py-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide">Admitted</th>
+                        <th class="text-left px-6 py-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide"><?= $isEmergency ? 'Emergency Bed' : 'Inpatient Room' ?></th>
+                        <th class="text-left px-6 py-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide"><?= $isEmergency ? 'Arrival' : 'Admitted' ?></th>
                         <th class="text-left px-6 py-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide">Status</th>
                         <th class="text-right px-6 py-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide">Actions</th>
                     </tr>
@@ -75,7 +101,6 @@ if (!$admission) {
                     <?php
                     $any = false;
                     foreach ($admissions as $a):
-                        if (!empty($a['discharge_datetime'])) continue;
                         $any = true;
                     ?>
                         <tr class="hover:bg-slate-50">
@@ -112,7 +137,7 @@ if (!$admission) {
                             <td class="px-6 py-4 text-right whitespace-nowrap">
                                 <a href="<?= BASE_URL ?>/index.php?page=nurse-room-assignments&admission_id=<?= (int)$a['admission_id'] ?>"
                                    class="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100">
-                                    Manage
+                                    <?= ($a['admission_status_name'] ?? '') === 'Emergency' ? 'Manage Emergency' : 'Manage Admission' ?>
                                 </a>
                             </td>
                         </tr>
@@ -121,11 +146,13 @@ if (!$admission) {
                     <?php if (!$any): ?>
                         <tr>
                             <td colspan="5" class="px-6 py-12 text-center text-slate-400">
-                                <p class="text-sm font-medium text-slate-600">No active admissions</p>
-                                <p class="text-xs mt-1">Admit a patient first to assign a room.</p>
-                                <a href="<?= BASE_URL ?>/index.php?page=nurse-admission-create"
+                                <p class="text-sm font-medium text-slate-600"><?= $isEmergency ? 'No active Emergency patients' : 'No active inpatient admissions' ?></p>
+                                <p class="text-xs mt-1"><?= $isEmergency
+                                    ? 'Only active ER encounters assigned to an Emergency Bed appear here.'
+                                    : 'Emergency encounters appear under Emergency Patients until admitted to an inpatient room.' ?></p>
+                                <a href="<?= BASE_URL ?>/index.php?page=<?= $isEmergency ? 'nurse-emergency-create' : 'nurse-admission-create' ?>"
                                    class="inline-flex items-center gap-2 mt-4 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
-                                    New Admission
+                                    <?= $isEmergency ? 'Emergency Patient' : 'New Admission' ?>
                                 </a>
                             </td>
                         </tr>
@@ -140,8 +167,11 @@ if (!$admission) {
 ?>
 
 <div class="mb-8">
-    <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Manage Admission</h1>
-    <p class="mt-1 text-sm text-slate-500">Manage room assignment and attending doctors for this admission.<?= $preferredRoomTypeName !== '' ? ' Patient preference: ' . htmlspecialchars($preferredRoomTypeName) . '.' : '' ?></p>
+    <h1 class="text-2xl font-bold text-slate-900 tracking-tight"><?= $isEmergency ? 'Manage Emergency' : 'Manage Admission' ?></h1>
+    <p class="mt-1 text-sm text-slate-500">
+        <?= $isEmergency ? 'Manage Emergency Bed assignment and Emergency Doctors for this patient.' : 'Manage inpatient room assignment and Admission Doctors for this patient.' ?>
+        <?= $preferredRoomTypeName !== '' ? ' Patient preference: ' . htmlspecialchars($preferredRoomTypeName) . '.' : '' ?>
+    </p>
 </div>
 
 <div id="alert" class="hidden mb-5 rounded-lg px-4 py-3 text-sm border"></div>
@@ -155,7 +185,7 @@ if (!$admission) {
             </div>
             <div>
                 <h2 class="text-lg font-bold text-slate-900"><?= htmlspecialchars($admission['first_name'] . ' ' . $admission['last_name']) ?></h2>
-                <p class="text-sm text-slate-500">Admission #<?= (int)$admission['admission_id'] ?> · Admitted <?= htmlspecialchars(date('M j, Y g:i A', strtotime($admission['admission_datetime']))) ?></p>
+                <p class="text-sm text-slate-500"><?= $isEmergency ? 'Emergency' : 'Admission' ?> #<?= (int)$admission['admission_id'] ?> · <?= $isEmergency ? 'Arrived' : 'Admitted' ?> <?= htmlspecialchars(date('M j, Y g:i A', strtotime($admission['admission_datetime']))) ?></p>
                 <p class="mt-1 text-sm text-slate-500">Date of birth: <?= !empty($admission['birth_date']) ? htmlspecialchars(date('M j, Y', strtotime($admission['birth_date']))) : 'Not recorded' ?></p>
                 <p class="mt-1 text-sm font-medium text-blue-700">Patient portal code: <?= htmlspecialchars($admission['patient_code'] ?: 'Not assigned') ?></p>
                 <?php if (!empty($admission['chief_complaint'])): ?>
@@ -163,13 +193,21 @@ if (!$admission) {
                 <?php endif; ?>
             </div>
         </div>
-        <span class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium self-start sm:self-auto"
-              style="background-color: <?= htmlspecialchars($admission['color_code'] ?? '#6b7280') ?>1A;
-                     color: <?= htmlspecialchars($admission['color_code'] ?? '#6b7280') ?>;
-                     border-color: <?= htmlspecialchars($admission['color_code'] ?? '#6b7280') ?>40;">
-            <span class="w-2 h-2 rounded-full" style="background-color: <?= htmlspecialchars($admission['color_code'] ?? '#6b7280') ?>"></span>
-            <?= htmlspecialchars($admission['status_name'] ?? '—') ?>
-        </span>
+        <div class="flex flex-col items-start sm:items-end gap-3">
+            <span class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium"
+                  style="background-color: <?= htmlspecialchars($admission['color_code'] ?? '#6b7280') ?>1A;
+                         color: <?= htmlspecialchars($admission['color_code'] ?? '#6b7280') ?>;
+                         border-color: <?= htmlspecialchars($admission['color_code'] ?? '#6b7280') ?>40;">
+                <span class="w-2 h-2 rounded-full" style="background-color: <?= htmlspecialchars($admission['color_code'] ?? '#6b7280') ?>"></span>
+                <?= htmlspecialchars($admission['status_name'] ?? '—') ?>
+            </span>
+            <?php if ($isEmergency): ?>
+                <a href="<?= BASE_URL ?>/index.php?page=nurse-admission-create&patient_id=<?= (int)$admission['patient_id'] ?>"
+                   class="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">
+                    Admit Patient
+                </a>
+            <?php endif; ?>
+        </div>
     </div>
 </div>
 
@@ -206,7 +244,8 @@ if (!$admission) {
                             Dr. <?= htmlspecialchars($d['first_name'] . ' ' . $d['last_name']) ?>
                         </p>
                         <p class="text-xs text-slate-500">
-                            <?= htmlspecialchars($d['doctor_role']) ?>
+                            <?= $d['care_scope'] === 'ER' ? 'Emergency Doctor' : 'Admission Doctor' ?>
+                            · <?= htmlspecialchars($d['doctor_role']) ?>
                             · Assigned <?= htmlspecialchars(date('M j, Y', strtotime($d['assigned_datetime']))) ?>
                             · ₱<?= number_format((float)$d['consultation_fee_charged'], 2) ?>
                         </p>
@@ -257,7 +296,7 @@ if (!$admission) {
     
     <div class="lg:col-span-1">
         <div class="bg-white rounded-xl border border-slate-200 p-6">
-            <h3 class="text-base font-semibold text-slate-900 mb-4">Current Room</h3>
+            <h3 class="text-base font-semibold text-slate-900 mb-4"><?= $isEmergency ? 'Current Emergency Bed' : 'Current Inpatient Room' ?></h3>
 
             <?php if ($currentAssignment): ?>
                 <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-4 mb-4">
@@ -291,7 +330,7 @@ if (!$admission) {
                     <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
                     </svg>
-                    Transfer Room
+                    <?= $isEmergency ? 'Transfer Emergency Bed' : 'Transfer Room' ?>
                 </button>
             <?php else: ?>
                 <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4 text-center">
@@ -340,8 +379,8 @@ if (!$admission) {
             $trulyAvailable = count(array_filter($availableRooms, fn($x) => $x['status_name'] === 'Available'));
             ?>
             <div class="flex items-center justify-between mb-4">
-                <h3 class="text-base font-semibold text-slate-900">Available Rooms</h3>
-                <span class="text-xs text-slate-500"><?= $trulyAvailable ?> room(s) available</span>
+                <h3 class="text-base font-semibold text-slate-900"><?= $isEmergency ? 'Available Emergency Beds' : 'Available Inpatient Rooms' ?></h3>
+                <span class="text-xs text-slate-500"><?= $trulyAvailable ?> <?= $isEmergency ? 'bed(s)' : 'room(s)' ?> available</span>
             </div>
 
             <div class="flex flex-wrap gap-2 mb-4">
@@ -434,8 +473,8 @@ if (!$admission) {
                     </svg>
                 </div>
                 <div>
-                    <h3 class="text-base font-semibold text-slate-900">Transfer Room</h3>
-                    <p class="text-xs text-slate-500">Move patient to a different room.</p>
+                    <h3 class="text-base font-semibold text-slate-900"><?= $isEmergency ? 'Transfer Emergency Bed' : 'Transfer Room' ?></h3>
+                    <p class="text-xs text-slate-500"><?= $isEmergency ? 'Move patient to a different Emergency Bed.' : 'Move patient to a different room.' ?></p>
                 </div>
             </div>
             <button type="button" data-close-modal class="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100">
@@ -449,7 +488,7 @@ if (!$admission) {
             <input type="hidden" name="admission_id" value="<?= (int)$admissionId ?>">
 
             <div>
-                <label class="block text-sm font-medium text-slate-700 mb-1.5">New Room</label>
+                <label class="block text-sm font-medium text-slate-700 mb-1.5"><?= $isEmergency ? 'New Emergency Bed' : 'New Room' ?></label>
                 <select name="new_room_id" required
                         class="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
                     <option value="">— Select room —</option>
@@ -484,7 +523,7 @@ if (!$admission) {
             </button>
             <button type="button" id="confirmTransferBtn"
                     class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-60">
-                <span id="confirmTransferLabel">Transfer Room</span>
+                <span id="confirmTransferLabel"><?= $isEmergency ? 'Transfer Emergency Bed' : 'Transfer Room' ?></span>
             </button>
         </div>
     </div>
@@ -666,7 +705,7 @@ if (!$admission) {
                 showAlert('error', res?.message || 'Could not transfer room.');
             } finally {
                 btn.disabled = false;
-                label.textContent = 'Transfer Room';
+                label.textContent = <?= json_encode($isEmergency ? 'Transfer Emergency Bed' : 'Transfer Room') ?>;
             }
         });
     }

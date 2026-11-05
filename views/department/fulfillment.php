@@ -73,6 +73,11 @@ $details = $requestId > 0 ? $controller->getRequestDetails($requestId) : null;
                 </div>
 
                 <div class="p-5">
+                    <?php if (($details['care_scope'] ?? '') === 'ER'): ?>
+                        <div class="mb-5 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800">
+                            Emergency charges are recorded from the quantities fulfilled here. Unfulfilled quantities are not charged.
+                        </div>
+                    <?php endif; ?>
                     <?php if (!empty($details['medicine_return'])): ?>
                         <div class="mb-5 rounded-lg border border-amber-200 bg-amber-50 p-4">
                             <p class="font-semibold text-amber-900">Doctor-authorized Pharmacy stock return</p>
