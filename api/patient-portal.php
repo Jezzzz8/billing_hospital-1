@@ -258,7 +258,7 @@ if ($operation === 'logout' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         ]);
     }
     session_destroy();
-    patient_portal_json(200, ['success' => true]);
+    patient_portal_json(200, ['success' => true, 'redirect' => BASE_URL . '/index.html']);
 }
 
 if ($operation === 'touch' && $_SERVER['REQUEST_METHOD'] === 'GET') {

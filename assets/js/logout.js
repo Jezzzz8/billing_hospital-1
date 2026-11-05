@@ -16,7 +16,8 @@ document.addEventListener('click', async (event) => {
         5: 'department-login.html',
     };
     const roleId = Number(document.body?.dataset?.userRole || 0);
-    let redirectUrl = button.dataset.logoutRedirect || `${baseUrl}/${roleLoginPages[roleId] || 'index.php'}`;
+    const pageRedirect = button.dataset.logoutRedirect;
+    let redirectUrl = pageRedirect || `${baseUrl}/${roleLoginPages[roleId] || 'index.html'}`;
 
     try {
         const response = await axios.post(`${baseUrl}/api/logout.php`, {}, {
@@ -26,7 +27,7 @@ document.addEventListener('click', async (event) => {
         if (!response.data?.success) {
             throw new Error('The logout endpoint did not confirm sign-out.');
         }
-        if (typeof response.data.redirect === 'string' && response.data.redirect !== '') {
+        if (!pageRedirect && typeof response.data.redirect === 'string' && response.data.redirect !== '') {
             redirectUrl = response.data.redirect;
         }
     } catch (error) {

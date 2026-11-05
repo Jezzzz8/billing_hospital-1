@@ -79,11 +79,11 @@ class BillingNotifier implements MessageComponentInterface
         // Broadcasts are accepted only from the loopback TCP relay below.
     }
 
-    public function broadcast(array $data): void
+    public function broadcast(array $data): array
     {
         $eventName = trim((string)($data['event'] ?? ''));
         if ($eventName === '' || strlen($eventName) > 100) {
-            return;
+            return ['accepted' => false, 'queued' => 0, 'send_errors' => 0];
         }
 
         $payload = is_array($data['payload'] ?? null) ? $data['payload'] : [];
@@ -99,11 +99,11 @@ class BillingNotifier implements MessageComponentInterface
 
         if ($frame === false) {
             echo "[WS ERROR] Failed to encode broadcast JSON\n";
-            return;
+            return ['accepted' => false, 'queued' => 0, 'send_errors' => 0];
         }
 
-        $sent = 0;
-        $failed = 0;
+        $queued = 0;
+        $sendErrors = 0;
         $failedClients = [];
 
         foreach ($this->clients as $client) {
@@ -114,15 +114,15 @@ class BillingNotifier implements MessageComponentInterface
                         is_array($data['payload'] ?? null) ? $data['payload'] : []
                     )) {
                         $client->send('{"type":"portal.refresh"}');
-                        $sent++;
+                        $queued++;
                     }
                     continue;
                 }
 
                 $client->send($frame);
-                $sent++;
+                $queued++;
             } catch (\Throwable $e) {
-                $failed++;
+                $sendErrors++;
                 $failedClients[] = $client;
             }
         }
@@ -138,12 +138,14 @@ class BillingNotifier implements MessageComponentInterface
         }
 
         echo sprintf(
-            "[WS BROADCAST] Event=%s | Sent=%d | Failed=%d\n",
+            "[WS BROADCAST] Event=%s | SocketQueued=%d | SendErrors=%d | Connections=%d\n",
             $eventName,
-            $sent,
-            $failed
+            $queued,
+            $sendErrors,
+            $this->clients->count()
         );
 
+        return ['accepted' => true, 'queued' => $queued, 'send_errors' => $sendErrors];
     }
 
     public function onClose(ConnectionInterface $conn): void
@@ -251,10 +253,10 @@ $broadcastRelay->on(
                 }
 
                 $request = json_decode(substr($buffer, 0, $lineEnd), true);
-                if (is_array($request) && ($request['action'] ?? '') === 'broadcast') {
-                    $notifier->broadcast($request);
-                }
-                $connection->end();
+                $result = is_array($request) && ($request['action'] ?? '') === 'broadcast'
+                    ? $notifier->broadcast($request)
+                    : ['accepted' => false, 'queued' => 0, 'send_errors' => 0];
+                $connection->end(json_encode($result) . "\n");
             }
         );
     }

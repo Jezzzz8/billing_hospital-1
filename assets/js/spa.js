@@ -23,9 +23,10 @@ function updateNavigation(page, title) {
     const pageTitle = document.getElementById("page-title");
     if (pageTitle) pageTitle.textContent = title;
 
-    document.querySelectorAll("nav a[href*='?page=']").forEach(link => {
+    document.querySelectorAll("nav a[href$='.html']").forEach(link => {
         const url = new URL(link.href, location.href);
-        const active = url.searchParams.get("page") === page;
+        const active = (url.pathname.split("/").pop()?.replace(/.html$/, "")
+            || url.searchParams.get("page")) === page;
         link.setAttribute("aria-current", active ? "page" : "false");
         link.classList.toggle("bg-blue-50", active);
         link.classList.toggle("text-blue-700", active);
@@ -75,7 +76,20 @@ async function loadPage(url, addHistory = true) {
     navigationController?.abort();
     navigationController = new AbortController();
     const { signal } = navigationController;
-    const partialUrl = new URL(url.href);
+    const route = new URL(url.href);
+    const routeName = route.pathname.split("/").pop() || "";
+    const pagesIndex = route.pathname.lastIndexOf("/pages/");
+    const appBasePath = pagesIndex >= 0
+        ? route.pathname.slice(0, pagesIndex)
+        : route.pathname.slice(0, route.pathname.lastIndexOf("/"));
+    const partialUrl = route.pathname.endsWith("/api/router.php")
+        ? new URL(route.href)
+        : new URL(`${appBasePath}/api/router.php`, route.origin);
+    if (!route.pathname.endsWith("/api/router.php")) {
+        const page = routeName.replace(/.html$/, "");
+        if (page && page !== "index") partialUrl.searchParams.set("page", page);
+        route.searchParams.forEach((value, key) => partialUrl.searchParams.set(key, value));
+    }
     partialUrl.searchParams.set("partial", "1");
 
     const response = await fetch(partialUrl, {
@@ -121,18 +135,7 @@ async function loadPage(url, addHistory = true) {
 
     document.body.dataset.pageScript = scriptUrl || "";
     document.body.dataset.pageModule = scriptIsModule ? "1" : "0";
-    if (addHistory) {
-        const historyUrl = new URL(url.href);
-        historyUrl.searchParams.delete("partial");
-        if (historyUrl.pathname.endsWith("/index.php")) {
-            const routePage = historyUrl.searchParams.get("page");
-            if (routePage) {
-                historyUrl.pathname = `${historyUrl.pathname.slice(0, -"/index.php".length)}/${routePage}.html`;
-                historyUrl.searchParams.delete("page");
-            }
-        }
-        history.pushState({}, "", historyUrl.href);
-    }
+    if (addHistory) history.pushState({}, "", route.href);
 
     dispatchPageLoaded(page);
     if (addHistory) window.scrollTo(0, 0);
@@ -153,9 +156,12 @@ document.addEventListener("click", event => {
     }
 
     const url = new URL(anchor.href, location.href);
-    if (url.origin !== location.origin || !url.pathname.endsWith("/index.php")) return;
+    if (url.origin !== location.origin ||
+        (!url.pathname.endsWith("/api/router.php") && !url.pathname.endsWith(".html"))) return;
 
-    const destination = url.searchParams.get("page") || "";
+    const destination = url.searchParams.get("page")
+        || url.pathname.split("/").pop()?.replace(/.html$/, "")
+        || "";
     const currentPage = document.body.dataset.page || "";
     if (!destination || cashierPage(destination) || cashierPage(currentPage)) return;
 
@@ -169,7 +175,7 @@ document.addEventListener("click", event => {
 window.addEventListener("popstate", () => {
     const currentUrl = new URL(location.href);
     const page = currentUrl.searchParams.get("page")
-        || currentUrl.pathname.split("/").pop()?.replace(/\.html$/, "")
+        || currentUrl.pathname.split("/").pop()?.replace(/.html$/, "")
         || "";
     if (!page || cashierPage(page) || cashierPage(document.body.dataset.page || "")) return;
 

@@ -154,7 +154,7 @@ document.addEventListener('click', event => {
     const anchor = event.target.closest('a[href]');
     if (!anchor || anchor.target === '_blank' || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     const url = new URL(anchor.href, location.href);
-    if (url.origin !== location.origin || !url.pathname.endsWith('/index.php')) return;
+    if (url.origin !== location.origin || !url.pathname.endsWith('/api/router.php')) return;
     const destination = url.searchParams.get('page') || 'cashier';
     if (destination !== 'cashier' && !destination.startsWith('cashier-')) return;
     event.preventDefault();
@@ -182,10 +182,10 @@ async function loadDashboard() {
         </div>
         <div class="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
             <section class="rounded-xl border border-slate-200 bg-white p-6 lg:col-span-2">
-                <div class="mb-4 flex items-center justify-between"><div><h2 class="font-semibold text-slate-900">Recent statements</h2><p class="text-xs text-slate-500">Latest billing activity</p></div><a href="${baseUrl}/index.php?page=cashier-statements" class="text-sm font-medium text-blue-600">View all →</a></div>
+                <div class="mb-4 flex items-center justify-between"><div><h2 class="font-semibold text-slate-900">Recent statements</h2><p class="text-xs text-slate-500">Latest billing activity</p></div><a href="${baseUrl}/pages/cashier/cashier-statements.html" class="text-sm font-medium text-blue-600">View all →</a></div>
                 <div class="overflow-x-auto"><table class="min-w-full text-sm"><thead class="text-left text-xs uppercase text-slate-500"><tr><th class="py-2">Statement</th><th class="py-2">Patient</th><th class="py-2 text-right">Balance</th><th class="py-2">Status</th></tr></thead><tbody class="divide-y">${recent.length ? recent.slice(0, 10).map(row => `<tr><td class="py-3 font-medium">#${html(statementId(row))}</td><td class="py-3">${html(personName(row))}</td><td class="py-3 text-right">${money(row.balance_amount)}</td><td class="py-3">${statusPill(row)}</td></tr>`).join('') : '<tr><td colspan="4" class="py-8 text-center text-slate-400">No statements yet.</td></tr>'}</tbody></table></div>
             </section>
-            <section class="rounded-xl border border-slate-200 bg-white p-6"><h2 class="font-semibold text-slate-900">Recent admissions</h2><p class="mb-3 text-xs text-slate-500">Open a patient's running statement</p><div class="space-y-3">${admissions.length ? admissions.slice(0, 8).map(row => `<div class="flex items-center justify-between gap-3 border-b border-slate-100 pb-3"><div><p class="text-sm font-medium">${html(personName(row))}</p><p class="text-xs text-slate-500">Admission #${html(row.admission_id)}</p></div><a href="${baseUrl}/index.php?page=cashier-receipt&id=${encodeURIComponent(row.statement_id)}" class="text-xs font-semibold text-blue-600">Open statement</a></div>`).join('') : '<p class="py-6 text-center text-sm text-slate-400">No admissions yet.</p>'}</div></section>
+            <section class="rounded-xl border border-slate-200 bg-white p-6"><h2 class="font-semibold text-slate-900">Recent admissions</h2><p class="mb-3 text-xs text-slate-500">Open a patient's running statement</p><div class="space-y-3">${admissions.length ? admissions.slice(0, 8).map(row => `<div class="flex items-center justify-between gap-3 border-b border-slate-100 pb-3"><div><p class="text-sm font-medium">${html(personName(row))}</p><p class="text-xs text-slate-500">Admission #${html(row.admission_id)}</p></div><a href="${baseUrl}/pages/cashier/cashier-receipt.html?id=${encodeURIComponent(row.statement_id)}" class="text-xs font-semibold text-blue-600">Open statement</a></div>`).join('') : '<p class="py-6 text-center text-sm text-slate-400">No admissions yet.</p>'}</div></section>
         </div>`;
 }
 
@@ -237,7 +237,7 @@ function renderStatementList() {
             <td class="px-6 py-4"><p class="font-semibold">#${html(id)}</p><p class="text-xs text-slate-500">${html(dateLabel(row.statement_date))}</p></td>
             <td class="px-6 py-4"><p class="font-medium">${html(personName(row))}</p><p class="text-xs text-slate-500">${html(row.contact_number || row.email || '')}</p></td>
             <td class="px-6 py-4 text-right">${money(row.total_amount)}</td><td class="px-6 py-4 text-right text-emerald-700">${money(row.amount_paid)}</td><td class="px-6 py-4 text-right font-semibold text-rose-700">${money(row.balance_amount)}</td>
-            <td class="px-6 py-4">${statusPill(row)}</td><td class="px-6 py-4 text-right whitespace-nowrap"><button type="button" data-manage="${html(id)}" class="rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-medium text-blue-700">Manage</button> <a target="_blank" href="${baseUrl}/index.php?page=cashier-receipt&id=${encodeURIComponent(id)}" class="rounded-lg border px-2.5 py-1.5 text-xs">Print</a></td>
+            <td class="px-6 py-4">${statusPill(row)}</td><td class="px-6 py-4 text-right whitespace-nowrap"><button type="button" data-manage="${html(id)}" class="rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-medium text-blue-700">Manage</button> <a target="_blank" href="${baseUrl}/pages/cashier/cashier-receipt.html?id=${encodeURIComponent(id)}" class="rounded-lg border px-2.5 py-1.5 text-xs">Print</a></td>
         </tr>`;
     }).join('');
     document.getElementById('statementsEmpty').classList.toggle('hidden', statementRows.length > 0);
@@ -324,7 +324,7 @@ async function openStatement(id) {
         renderStatementDetails(activeStatement);
         document.getElementById('manageTitle').textContent = `Statement #${id}`;
         document.getElementById('manageSubtitle').textContent = `${personName(activeStatement)} · Admission #${activeStatement.admission_id ?? '—'}`;
-        document.getElementById('statementPrintLink').href = `${baseUrl}/index.php?page=cashier-receipt&id=${encodeURIComponent(id)}`;
+        document.getElementById('statementPrintLink').href = `${baseUrl}/pages/cashier/cashier-receipt.html?id=${encodeURIComponent(id)}`;
         modal('manageModal', true);
     } catch (error) {
         alertMessage(error.message);

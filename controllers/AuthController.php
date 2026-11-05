@@ -99,12 +99,12 @@ class AuthController
     private function redirectForRole(int $roleId): string
     {
         return match ($roleId) {
-            1 => BASE_URL . '/dashboard.html',
-            2 => BASE_URL . '/doctor.html',
-            3 => BASE_URL . '/nurse.html',
-            4 => BASE_URL . '/cashier.html',
-            5 => BASE_URL . '/department.html',
-            default => BASE_URL . '/index.php',
+            1 => BASE_URL . '/pages/admin/dashboard.html',
+            2 => BASE_URL . '/pages/doctor/doctor.html',
+            3 => BASE_URL . '/pages/nurse/nurse.html',
+            4 => BASE_URL . '/pages/cashier/cashier.html',
+            5 => BASE_URL . '/pages/department/department.html',
+            default => BASE_URL . '/index.html',
         };
     }
 

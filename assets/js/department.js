@@ -130,7 +130,7 @@ document.addEventListener('spa:page-loaded', event => {
                                         <span class="font-medium">${Number(r.item_count || 0)}</span> item(s)
                                     </td>
                                     <td class="px-6 py-4 text-right">
-                                        <a href="${baseUrl}/index.php?page=department-fulfillment&request_id=${Number(r.request_id || 0)}"
+                                        <a href="${baseUrl}/pages/department/department-fulfillment.html?request_id=${Number(r.request_id || 0)}"
                                            class="inline-flex items-center rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 hover:bg-blue-100">
                                             Open
                                         </a>

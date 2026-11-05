@@ -19,7 +19,7 @@ document.addEventListener('spa:page-loaded', event => {
         ? new Intl.DateTimeFormat(undefined, options).format(new Date(value.replace(' ', 'T')))
         : '—';
     const money = value => `₱${Number(value || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    const href = (name, id = '') => `${baseUrl}/index.php?page=${name}${id ? `&admission_id=${id}` : ''}`;
+    const href = (name, id = '') => `${baseUrl}/${name}.html${id ? `?admission_id=${id}` : ''}`;
     const endpoint = (operation) => `${apiUrl}?operation=${encodeURIComponent(operation)}`;
     const button = (label, action, attrs = '', style = 'blue') => {
         const colors = {

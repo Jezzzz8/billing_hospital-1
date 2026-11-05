@@ -37,6 +37,6 @@ $loginPages = [
     4 => 'cashier-login.html',
     5 => 'department-login.html',
 ];
-$redirect = BASE_URL . '/' . ($loginPages[$roleId] ?? 'index.php');
+$redirect = BASE_URL . '/' . ($loginPages[$roleId] ?? 'index.html');
 
 echo json_encode(['success' => true, 'redirect' => $redirect]);

@@ -29,7 +29,7 @@ function initializeNursePage(event) {
     const badge = (label, color = '#64748b') => `<span class="inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium" style="background-color:${escapeHtml(color)}1A;color:${escapeHtml(color)};border-color:${escapeHtml(color)}40">${escapeHtml(label || '—')}</span>`;
     const emptyState = (title, detail = '') => `<div class="rounded-xl border border-slate-200 bg-white p-10 text-center"><p class="font-medium text-slate-700">${escapeHtml(title)}</p><p class="mt-1 text-sm text-slate-500">${escapeHtml(detail)}</p></div>`;
     const link = (page, params = {}) => {
-        const url = new URL(`${baseUrl}/index.php`, location.origin);
+        const url = new URL(`${baseUrl}/api/router.php`, location.origin);
         url.searchParams.set('page', page);
         Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
         return url.toString();

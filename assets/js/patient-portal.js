@@ -1,6 +1,9 @@
 (function () {
+    const pagesIndex = window.location.pathname.lastIndexOf('/pages/');
     const baseUrl = document.body.dataset.baseUrl
-        || window.location.pathname.slice(0, window.location.pathname.lastIndexOf('/'));
+        || (pagesIndex >= 0
+            ? window.location.pathname.slice(0, pagesIndex)
+            : window.location.pathname.slice(0, window.location.pathname.lastIndexOf('/')));
     const apiUrl = `${baseUrl}/api/patient-portal.php`;
     const loginSection = document.getElementById('patientPortalLogin');
     const recordsSection = document.getElementById('patientPortalRecords');
@@ -189,7 +192,7 @@
                     <td class="px-4 py-3 text-right">${money(statement.total_amount)}</td>
                     <td class="px-4 py-3 text-right">${money(statement.amount_paid)}</td>
                     <td class="px-4 py-3 text-right font-semibold">${money(statement.balance_amount)}</td>
-                    <td class="px-4 py-3 text-right"><a target="_blank" rel="noopener" href="${baseUrl}/patient-statement.html?statement_id=${Number(statement.statement_id)}" class="whitespace-nowrap rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100">View Statement</a></td>
+                    <td class="px-4 py-3 text-right"><a target="_blank" rel="noopener" href="${baseUrl}/pages/patient/patient-statement.html?statement_id=${Number(statement.statement_id)}" class="whitespace-nowrap rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100">View Statement</a></td>
                 </tr>`).join('')
             : '<tr><td colspan="7" class="px-4 py-8 text-center text-sm text-slate-500">No billing statements available.</td></tr>';
         const statementCards = data.statements.length
@@ -238,7 +241,7 @@
                             </ul>
                         </section>
                     ` : ''}
-                    <a target="_blank" rel="noopener" href="${baseUrl}/patient-statement.html?statement_id=${Number(statement.statement_id)}" class="mt-4 inline-flex w-full items-center justify-center rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100">View Statement</a>
+                    <a target="_blank" rel="noopener" href="${baseUrl}/pages/patient/patient-statement.html?statement_id=${Number(statement.statement_id)}" class="mt-4 inline-flex w-full items-center justify-center rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100">View Statement</a>
                 </article>`;
             }).join('')
             : '<p class="px-4 py-8 text-center text-sm text-slate-500">No billing statements available.</p>';
@@ -330,9 +333,8 @@
 
     async function logout() {
         try {
-            await request('logout', { method: 'POST', body: {} });
-            showLogin();
-            await Swal.fire({ icon: 'success', title: 'Signed out', timer: 1200, showConfirmButton: false });
+            const result = await request('logout', { method: 'POST', body: {} });
+            window.location.assign(result.redirect);
         } catch (error) {
             await Swal.fire({ icon: 'error', title: 'Could not sign out', text: error.message });
         }

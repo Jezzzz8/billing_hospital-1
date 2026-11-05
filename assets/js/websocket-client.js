@@ -11,12 +11,6 @@
     const clearNotifications = document.getElementById('clearNotifications');
     const markAllNotificationsRead = document.getElementById('markAllNotificationsRead');
     const closeNotifications = document.getElementById('closeNotifications');
-    const adminNotificationEvents = new Set([
-        'master.updated',
-        'doctor.profile.created',
-        'doctor.profile.toggled',
-        'doctor.profile.updated',
-    ]);
     const eventMessages = {
         'admission.created': ['New admission', 'A patient admission was created.'],
         'admission.discharged': ['Patient discharged', 'A patient admission was discharged.'],
@@ -38,8 +32,10 @@
         'doctor.profile.toggled': ['Doctor status changed', 'A doctor profile status was changed.'],
         'doctor.profile.updated': ['Doctor updated', 'A doctor profile was updated.'],
         'doctor.removed': ['Doctor assignment removed', 'A doctor was removed from an admission.'],
+        'esp32.notification': ['Device notification', 'A device notification was sent.'],
         'fulfillment.received': ['Items received', 'Fulfilled items were received by nursing staff.'],
         'master.updated': ['Records updated', 'Hospital reference data was updated.'],
+        'medicine.disposition.updated': ['Medicine plan updated', 'Medicine take-home and return quantities were updated.'],
         'medicine.return.received': ['Medicine return received', 'Pharmacy received a medicine return and updated the patient bill.'],
         'medicine.intake.updated': ['Intake tracking updated', "Nursing recorded a dose or reconciled a patient's Pharmacy-item quantity."],
         'patient.created': ['Patient registered', 'A new patient was registered.'],
@@ -49,38 +45,6 @@
         'service.request.created': ['New service request', 'A new service request was submitted.'],
         'service.request.fulfilled': ['Request fulfilled', 'A department recorded fulfillment for a service request.'],
         'service.request.processing': ['Request in progress', 'A service request is being processed.'],
-    };
-    const eventRoles = {
-        'admission.created': [3],
-        'admission.discharged': [2, 3],
-        'admission.room.assigned': [3],
-        'admission.room.transferred': [3],
-        'billing.charge.added': [4],
-        'billing.charge.removed': [4],
-        'billing.payment.added': [4],
-        'billing.payment.removed': [4],
-        'billing.statement.created': [4],
-        'billing.statement.updated': [4],
-        'consultation.created': [2],
-        'consultation.updated': [2],
-        'diagnosis.added': [2],
-        'diagnosis.removed': [2],
-        'discharge.confirmed': [2, 3],
-        'doctor.assigned': [2, 3],
-        'doctor.profile.created': [1],
-        'doctor.profile.toggled': [1],
-        'doctor.profile.updated': [1, 2],
-        'doctor.removed': [2, 3],
-        'fulfillment.received': [3, 5],
-        'medicine.return.received': [2, 4, 5],
-        'medicine.intake.updated': [3],
-        'patient.created': [3],
-        'service.request.accepted': [2, 5],
-        'service.request.cancelled': [2, 5],
-        'service.request.completed': [2, 5],
-        'service.request.created': [2, 5],
-        'service.request.fulfilled': [2, 3, 4, 5],
-        'service.request.processing': [2, 5],
     };
     let socket = null;
     let reconnectTimer = null;
@@ -93,8 +57,7 @@
             return Array.isArray(saved)
                 ? saved
                     .filter(item =>
-                        (userRole !== 1 || adminNotificationEvents.has(String(item.event || '')))
-                        && notificationUrl(item.event, item.payload || '') !== null
+                        notificationUrl(item.event, item.payload || {}) !== null
                     )
                     .slice(0, 50).map((item, index) => ({
                     ...item,
@@ -248,6 +211,16 @@
             page = 'department-queue';
         } else if (eventName === 'medicine.intake.updated' && userRole === 3) {
             page = 'nurse-medicine-intakes';
+        } else if (eventName === 'medicine.disposition.updated') {
+            page = userRole === 2
+                ? document.body.dataset.doctorCareScope === 'ER'
+                    ? 'doctor-patients'
+                    : 'doctor-discharge-ready'
+                : userRole === 3
+                    ? 'nurse-discharge-ready'
+                    : userRole === 4
+                        ? 'cashier-statements'
+                        : '';
         } else if (eventName.startsWith('doctor.profile.') && userRole === 1) {
             page = 'doctors';
         } else if (eventName.startsWith('doctor.profile.') && userRole === 2) {
@@ -295,10 +268,18 @@
             if (admissionId) params.admission_id = admissionId;
         }
 
-        if (!page) return null;
-        if (!pageAllowedForRole(page, userRole)) return null;
+        if (!page || !pageAllowedForRole(page, userRole)) {
+            page = {
+                1: 'dashboard',
+                2: 'doctor',
+                3: 'nurse',
+                4: 'cashier',
+                5: 'department',
+            }[userRole] || '';
+        }
+        if (!page || !pageAllowedForRole(page, userRole)) return null;
         const query = new URLSearchParams({ page, ...params });
-        return `${document.body.dataset.baseUrl || ''}/index.php?${query.toString()}`;
+        return `${document.body.dataset.baseUrl || ''}/api/router.php?${query.toString()}`;
     }
 
     function pageAllowedForRole(page, role) {
@@ -326,7 +307,10 @@
     }
 
     function notificationMessage(eventName, payload = {}) {
-        const [, baseMessage] = eventMessages[eventName] || ['Records updated', 'Hospital records were updated.'];
+        const [, defaultMessage] = eventMessages[eventName] || ['Records updated', 'Hospital records were updated.'];
+        const baseMessage = eventName === 'esp32.notification' && payload.message
+            ? String(payload.message)
+            : defaultMessage;
         const details = [];
         const patientName = payload.patient_name || payload.patient_full_name;
         if (patientName) details.push(`Patient: ${patientName}`);
@@ -347,13 +331,17 @@
         return details.length ? `${details.join(' · ')}. ${baseMessage}` : baseMessage;
     }
 
+    function notificationTitle(eventName, payload = {}) {
+        if (eventName === 'esp32.notification' && payload.title) return String(payload.title);
+        return (eventMessages[eventName] || ['Records updated'])[0];
+    }
+
     function addNotification(eventName, payload = {}) {
-        const [title] = eventMessages[eventName] || ['Records updated', 'Hospital records were updated.'];
         notifications.unshift({
             id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
             event: eventName,
             payload,
-            title,
+            title: notificationTitle(eventName, payload),
             message: notificationMessage(eventName, payload),
             timestamp: new Date().toISOString(),
             read: false,
@@ -458,23 +446,13 @@
                 return;
             }
             if (data.type !== 'event') return;
-            if (userRole === 1 && !adminNotificationEvents.has(String(data.event || ''))) return;
             const payload = data.payload || {};
-            if (Number(payload.sender_user_id || 0) === userId) return;
 
             const roles = Array.isArray(data.roles) ? data.roles.map(Number) : [];
             const targetUsers = Array.isArray(data.user_ids) ? data.user_ids.map(Number) : [];
             if (targetUsers.length) {
                 if (!targetUsers.includes(userId)) return;
             } else if (!roles.includes(userRole)) {
-                return;
-            }
-            const relevantRoles = eventRoles[data.event];
-            if (data.event === 'master.updated') {
-                const isAdminUpdate = userRole === 1 && adminNotificationEvents.has(String(data.event));
-                const isDoctorDiagnosisUpdate = userRole === 2 && payload.resource === 'diagnoses';
-                if (!isAdminUpdate && !isDoctorDiagnosisUpdate) return;
-            } else if (!relevantRoles || !relevantRoles.includes(userRole)) {
                 return;
             }
 
@@ -489,12 +467,11 @@
             document.dispatchEvent(new CustomEvent('ws:' + data.event, { detail: payload }));
             addNotification(String(data.event || 'update'), payload);
             if (window.Swal) {
-                const [title] = eventMessages[data.event] || ['Records updated', 'Hospital records were updated.'];
                 window.Swal.fire({
                     toast: true,
                     position: 'top-end',
                     icon: 'info',
-                    title,
+                    title: notificationTitle(String(data.event || 'update'), payload),
                     text: notificationMessage(String(data.event || 'update'), data.payload || {}),
                     showConfirmButton: false,
                     timer: 4500,

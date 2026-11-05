@@ -46,6 +46,27 @@ function ws_broadcast(
             }
             $offset += $written;
         }
+
+        $acknowledgment = fgets($socket, 1024);
+        $result = is_string($acknowledgment) ? json_decode($acknowledgment, true) : null;
+        if (!is_array($result) || empty($result['accepted'])) {
+            $socketState = stream_get_meta_data($socket);
+            $reason = !empty($socketState['timed_out'])
+                ? 'The local notification relay did not acknowledge the broadcast before timing out.'
+                : 'The local notification relay rejected or did not acknowledge the broadcast.';
+            throw new RuntimeException($reason);
+        }
+
+        if (!empty($result['send_errors'])) {
+            error_log(sprintf(
+                '[ws_broadcast] Relay queued %d socket(s) and reported %d send error(s) for %s.',
+                (int)($result['queued'] ?? 0),
+                (int)$result['send_errors'],
+                $event
+            ));
+        } elseif ((int)($result['queued'] ?? 0) === 0) {
+            error_log(sprintf('[ws_broadcast] Relay accepted %s, but queued it to zero socket connections.', $event));
+        }
     } catch (Throwable $e) {
         error_log('[ws_broadcast] ' . $e->getMessage());
     } finally {

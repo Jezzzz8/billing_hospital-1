@@ -15,18 +15,18 @@ document.addEventListener("DOMContentLoaded", () => {
     document.body.dataset.baseUrl ||
     window.location.pathname.slice(0, window.location.pathname.lastIndexOf("/"));
   const roleLandingPages = {
-    1: "dashboard",
-    2: "doctor",
-    3: "nurse",
-    4: "cashier",
-    5: "department",
+    1: "admin/dashboard",
+    2: "doctor/doctor",
+    3: "nurse/nurse",
+    4: "cashier/cashier",
+    5: "department/department",
   };
   const API_URL = baseUrl + "/api/login.php?expected_role_id=" + encodeURIComponent(expectedRoleId);
 
-  axios.get(`${baseUrl}/index.php?partial=1`, { withCredentials: true })
+  axios.get(`${baseUrl}/api/router.php?partial=1`, { withCredentials: true })
     .then((response) => {
       if (response.headers["x-page-id"]) {
-        window.location.replace(`${baseUrl}/${roleLandingPages[expectedRoleId] || "dashboard"}.html`);
+        window.location.replace(`${baseUrl}/pages/${roleLandingPages[expectedRoleId] || "admin/dashboard"}.html`);
       }
     })
     .catch((error) => {
