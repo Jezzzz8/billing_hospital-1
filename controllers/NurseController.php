@@ -943,7 +943,8 @@ class NurseController
                 $stmt = $this->pdo->prepare(
                     'UPDATE `admission`
                      SET status_id = ?, chief_complaint = ?, admission_type = ?, care_scope = "INPATIENT",
-                         admitted_by_user_id = ?, notes = ?
+                         admitted_by_user_id = ?, notes = ?,
+                         inpatient_requested_at = NULL, inpatient_requested_by_user_id = NULL
                      WHERE admission_id = ?'
                 );
                 $stmt->execute([
@@ -1123,6 +1124,7 @@ class NurseController
         return $this->pdo->query(
             'SELECT a.admission_id, a.admission_datetime, a.discharge_datetime,
                     a.chief_complaint, a.admission_type, a.care_scope, a.total_room_transfers,
+                    a.inpatient_requested_at,
                     a.status_id AS admission_status_id,
                     p.patient_id, p.first_name, p.last_name, p.patient_code,
                     ast.status_name AS admission_status_name, ast.color_code AS admission_status_color,

@@ -6,12 +6,17 @@ require_once __DIR__ . '/../../../controllers/DoctorHelper.php';
 
 $doctorId = DoctorHelper::getCurrentDoctorId($pdo);
 $controller = new DoctorPortalController($pdo, $doctorId);
+$isEmergencyDoctor = $controller->getCareScope() === 'ER';
 $patients = $controller->getReadyForDischarge();
 ?>
 
 <div class="mb-8">
     <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Ready for Discharge</h1>
-    <p class="mt-1 text-sm text-slate-500">Click <strong>Confirm Ready</strong>, or <strong>Set / Edit Medicine Split</strong> for a patient already marked ready. Enter the return quantity and the rest is taken home—for example, return 5 of 10 and the bill will show 5 returned and 5 taken home.</p>
+    <p class="mt-1 text-sm text-slate-500">
+        <?= $isEmergencyDoctor
+            ? 'Confirm when an emergency patient is ready to leave. Nursing staff will complete the discharge.'
+            : 'Click Confirm Ready, or set / edit the medicine split for a patient already marked ready. Nursing staff will complete the discharge.' ?>
+    </p>
 </div>
 
 <div id="alert" class="hidden mb-5 rounded-lg px-4 py-3 text-sm border"></div>
@@ -35,7 +40,7 @@ $patients = $controller->getReadyForDischarge();
                         <th class="text-left px-6 py-3 font-medium">Patient</th>
                         <th class="text-left px-6 py-3 font-medium">Room</th>
                         <th class="text-left px-6 py-3 font-medium">Admitted</th>
-                        <th class="text-left px-6 py-3 font-medium">Length of Stay</th>
+                        <th class="text-left px-6 py-3 font-medium"><?= $isEmergencyDoctor ? 'Duration' : 'Length of Stay' ?></th>
                         <th class="text-left px-6 py-3 font-medium">Requests</th>
                         <th class="text-right px-6 py-3 font-medium">Actions</th>
                     </tr>
@@ -81,7 +86,7 @@ $patients = $controller->getReadyForDischarge();
                                             </svg>
                                             Marked Ready
                                         </span>
-                                        <?php if ($editableMedicineItems): ?>
+                                        <?php if (!$isEmergencyDoctor && $editableMedicineItems): ?>
                                             <button type="button"
                                                     class="edit-medicine-disposition-btn rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100"
                                                     data-admission-id="<?= (int)$p['admission_id'] ?>"
@@ -96,7 +101,7 @@ $patients = $controller->getReadyForDischarge();
                                             class="confirm-discharge-btn inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
                                             data-admission-id="<?= (int)$p['admission_id'] ?>"
                                             data-patient-name="<?= htmlspecialchars($p['first_name'] . ' ' . $p['last_name']) ?>"
-                                            data-medicines="<?= htmlspecialchars(json_encode($p['medicine_return_items'] ?? [], JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP), ENT_QUOTES, 'UTF-8') ?>">
+                                            data-medicines="<?= htmlspecialchars(json_encode($isEmergencyDoctor ? [] : ($p['medicine_return_items'] ?? []), JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP), ENT_QUOTES, 'UTF-8') ?>">
                                         <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                                             <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
                                         </svg>

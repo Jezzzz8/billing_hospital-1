@@ -129,6 +129,19 @@ try {
             echo json_encode(['success' => true, 'data' => $controller->getReadyForDischarge()]);
             break;
 
+        case 'emergency-admissions-for-inpatient':
+            echo json_encode(['success' => true, 'data' => $controller->getEmergencyPatientsForAdmission()]);
+            break;
+
+        case 'mark-for-inpatient-admission':
+            $result = $controller->markForInpatientAdmission();
+            ws_broadcast('admission.inpatient.requested', [
+                'admission_id' => $result['admission_id'],
+                'message' => $result['message'],
+            ], [1, 3]);
+            echo json_encode($result);
+            break;
+
         case 'save-diagnosis':
             $controller->saveDiagnosis();
             ws_broadcast('diagnosis.added', [], [1, 2]);

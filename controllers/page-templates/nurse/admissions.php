@@ -116,6 +116,11 @@ $dischargedCount = count($admissions) - $activeCount;
                             <p class="text-xs font-medium <?= $careScopeClass ?>">
                                 <?= htmlspecialchars($careScopeLabel) ?>
                             </p>
+                            <?php if ($canAdmitToInpatient && !empty($a['inpatient_requested_at'])): ?>
+                                <span class="mt-1 inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+                                    For Admission
+                                </span>
+                            <?php endif; ?>
                             <p class="mt-1 text-xs font-medium text-blue-700">Patient code: <?= htmlspecialchars($a['patient_code'] ?: 'Not assigned') ?></p>
                         </td>
 
@@ -159,7 +164,7 @@ $dischargedCount = count($admissions) - $activeCount;
                                     <?php if ($canAdmitToInpatient): ?>
                                         <a href="<?= BASE_URL ?>/pages/nurse/nurse-admission-create.html?patient_id=<?= (int)$a['patient_id'] ?>"
                                            class="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100">
-                                            Admit Patient
+                                            <?= !empty($a['inpatient_requested_at']) ? 'Complete Admission' : 'Admit Patient' ?>
                                         </a>
                                     <?php endif; ?>
                                     <a href="<?= BASE_URL ?>/pages/nurse/nurse-room-assignments.html?admission_id=<?= (int)$a['admission_id'] ?>"

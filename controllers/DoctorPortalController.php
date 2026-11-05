@@ -36,6 +36,13 @@ class DoctorPortalController
         }
     }
 
+    private function requireEmergencyDoctor(): void
+    {
+        if ($this->getCareScope() !== 'ER') {
+            throw new RuntimeException('This feature is only available to Emergency Doctors.', 403);
+        }
+    }
+
     private function statusId(string $name): int
     {
         $stmt = $this->pdo->prepare('SELECT status_id FROM `admission_status` WHERE status_name = ? LIMIT 1');
@@ -919,9 +926,19 @@ class DoctorPortalController
 
     public function getReadyForDischarge(): array
     {
-        $this->requireInpatientDoctor();
-        $activeIds = $this->activeStatusIds();
-        $placeholders = implode(',', array_fill(0, count($activeIds), '?'));
+        $careScope = $this->getCareScope();
+        $statusNames = $careScope === 'ER'
+            ? ['Emergency', 'Ready for Discharge']
+            : ['Admitted', 'Transferred', 'Ready for Discharge'];
+        $statusIds = [];
+        foreach ($statusNames as $statusName) {
+            $statusId = $this->statusId($statusName);
+            if ($statusId > 0) $statusIds[] = $statusId;
+        }
+        if (!$statusIds) {
+            throw new RuntimeException('No eligible admission statuses are configured.');
+        }
+        $placeholders = implode(',', array_fill(0, count($statusIds), '?'));
 
         $stmt = $this->pdo->prepare(
             "SELECT a.admission_id, a.admission_datetime, a.chief_complaint,
@@ -944,24 +961,119 @@ class DoctorPortalController
              LEFT JOIN `room` r ON r.room_id = ra.room_id
              LEFT JOIN `room_type` rt ON rt.room_type_id = r.room_type_id
              WHERE ad.doctor_id = ? AND ad.ended_datetime IS NULL
-               AND a.status_id IN ($placeholders)
+               AND a.care_scope = ? AND a.status_id IN ($placeholders)
              HAVING active_count = 0
              ORDER BY a.admission_datetime ASC"
         );
-        $stmt->execute(array_merge([$this->doctorId], $activeIds));
+        $stmt->execute(array_merge([$this->doctorId, $careScope], $statusIds));
         $patients = $stmt->fetchAll();
         foreach ($patients as &$patient) {
-            $patient['medicine_return_items'] = $this->getMedicineReturnItems((int)$patient['admission_id']);
+            $patient['medicine_return_items'] = $careScope === 'ER'
+                ? []
+                : $this->getMedicineReturnItems((int)$patient['admission_id']);
         }
         unset($patient);
         return $patients;
     }
 
-    public function confirmDischarge(): void
+    public function getEmergencyPatientsForAdmission(): array
     {
-        $this->requireInpatientDoctor();
+        $this->requireEmergencyDoctor();
+        $emergencyId = $this->statusId('Emergency');
+        if ($emergencyId <= 0) {
+            throw new RuntimeException('System configuration error: status "Emergency" is missing.');
+        }
+
+        $stmt = $this->pdo->prepare(
+            'SELECT a.admission_id, a.admission_datetime, a.chief_complaint,
+                    a.inpatient_requested_at,
+                    p.first_name, p.last_name,
+                    r.room_number, rt.room_type_name
+             FROM `admission_doctor` ad
+             INNER JOIN `admission` a ON a.admission_id = ad.admission_id
+             INNER JOIN `patient` p ON p.patient_id = a.patient_id
+             LEFT JOIN `room_assignment` ra ON ra.admission_id = a.admission_id
+                AND ra.is_active = 1 AND ra.end_datetime IS NULL
+             LEFT JOIN `room` r ON r.room_id = ra.room_id
+             LEFT JOIN `room_type` rt ON rt.room_type_id = r.room_type_id
+             WHERE ad.doctor_id = ? AND ad.ended_datetime IS NULL
+               AND a.care_scope = "ER" AND a.status_id = ?
+             ORDER BY a.inpatient_requested_at IS NULL, a.admission_datetime ASC'
+        );
+        $stmt->execute([$this->doctorId, $emergencyId]);
+        return $stmt->fetchAll();
+    }
+
+    public function markForInpatientAdmission(): array
+    {
+        $this->requireEmergencyDoctor();
         $data = $this->input();
         $admissionId = (int)($data['admission_id'] ?? 0);
+        if ($admissionId <= 0) {
+            throw new RuntimeException('Admission id is required.', 422);
+        }
+
+        $emergencyId = $this->statusId('Emergency');
+        if ($emergencyId <= 0) {
+            throw new RuntimeException('System configuration error: status "Emergency" is missing.');
+        }
+        $userId = (int)($_SESSION['user']['user_id'] ?? 0);
+        if ($userId <= 0) {
+            throw new RuntimeException('Not authenticated.', 403);
+        }
+
+        try {
+            $this->pdo->beginTransaction();
+            $stmt = $this->pdo->prepare(
+                'SELECT a.status_id, a.care_scope, a.inpatient_requested_at
+                 FROM `admission` a
+                 WHERE a.admission_id = ? LIMIT 1 FOR UPDATE'
+            );
+            $stmt->execute([$admissionId]);
+            $admission = $stmt->fetch();
+            if (!$admission) {
+                throw new RuntimeException('Admission not found.', 404);
+            }
+
+            $stmt = $this->pdo->prepare(
+                'SELECT 1 FROM `admission_doctor`
+                 WHERE admission_id = ? AND doctor_id = ? AND ended_datetime IS NULL
+                 LIMIT 1'
+            );
+            $stmt->execute([$admissionId, $this->doctorId]);
+            if (!$stmt->fetchColumn()) {
+                throw new RuntimeException('You are not assigned to this emergency patient.', 403);
+            }
+            if ($admission['care_scope'] !== 'ER' || (int)$admission['status_id'] !== $emergencyId) {
+                throw new RuntimeException('Only active Emergency patients can be marked for inpatient admission.', 409);
+            }
+
+            if (empty($admission['inpatient_requested_at'])) {
+                $stmt = $this->pdo->prepare(
+                    'UPDATE `admission`
+                     SET inpatient_requested_at = NOW(), inpatient_requested_by_user_id = ?
+                     WHERE admission_id = ?'
+                );
+                $stmt->execute([$userId, $admissionId]);
+            }
+            $this->pdo->commit();
+
+            return [
+                'success' => true,
+                'message' => 'Patient marked For Admission. Nursing staff have been notified to complete the inpatient conversion.',
+                'admission_id' => $admissionId,
+            ];
+        } catch (Throwable $e) {
+            if ($this->pdo->inTransaction()) $this->pdo->rollBack();
+            throw $e;
+        }
+    }
+
+    public function confirmDischarge(): void
+    {
+        $data = $this->input();
+        $admissionId = (int)($data['admission_id'] ?? 0);
+        $careScope = $this->getCareScope();
 
         if ($admissionId <= 0) {
             $this->json(422, ['success' => false, 'message' => 'Admission id is required.']);
@@ -977,7 +1089,7 @@ class DoctorPortalController
         }
 
         $stmt = $this->pdo->prepare(
-            'SELECT a.admission_id, a.status_id, ast.status_name,
+            'SELECT a.admission_id, a.status_id, a.care_scope, ast.status_name,
                     p.first_name, p.last_name
              FROM `admission` a
              INNER JOIN `admission_status` ast ON ast.status_id = a.status_id
@@ -990,18 +1102,24 @@ class DoctorPortalController
             $this->json(404, ['success' => false, 'message' => 'Admission not found.']);
         }
 
+        $allowedNames = $careScope === 'ER'
+            ? ['Emergency']
+            : ['Admitted', 'Transferred'];
         $allowedIds = [];
-        foreach (['Admitted', 'Transferred'] as $n) {
+        foreach ($allowedNames as $n) {
             $id = $this->statusId($n);
             if ($id > 0) $allowedIds[] = $id;
         }
-        if (!$allowedIds) $allowedIds = [1, 3];
+        if (!$allowedIds && $careScope === 'INPATIENT') $allowedIds = [1, 3];
 
-        if (!in_array((int)$row['status_id'], $allowedIds, true)) {
+        if ($row['care_scope'] !== $careScope || !in_array((int)$row['status_id'], $allowedIds, true)) {
             $this->json(409, [
                 'success' => false,
                 'message' => 'This admission cannot be cleared for discharge (current status: '
-                    . $row['status_name'] . '). Only Admitted or Transferred patients can be cleared.',
+                    . $row['status_name'] . '). '
+                    . ($careScope === 'ER'
+                        ? 'Only Emergency patients can be cleared.'
+                        : 'Only Admitted or Transferred patients can be cleared.'),
             ]);
         }
 
@@ -1014,14 +1132,15 @@ class DoctorPortalController
             $this->pdo->beginTransaction();
 
             $stmt = $this->pdo->prepare(
-                'SELECT a.status_id, ast.status_name
+                'SELECT a.status_id, a.care_scope, ast.status_name
                  FROM `admission` a
                  INNER JOIN `admission_status` ast ON ast.status_id = a.status_id
                  WHERE a.admission_id = ? FOR UPDATE'
             );
             $stmt->execute([$admissionId]);
             $lockedAdmission = $stmt->fetch();
-            if (!$lockedAdmission || !in_array((int)$lockedAdmission['status_id'], $allowedIds, true)) {
+            if (!$lockedAdmission || $lockedAdmission['care_scope'] !== $careScope
+                || !in_array((int)$lockedAdmission['status_id'], $allowedIds, true)) {
                 $this->pdo->rollBack();
                 $this->json(409, [
                     'success' => false,

@@ -132,7 +132,7 @@ $recentAdmissions = $controller->getRecentAdmissions(10);
         </div>
     </a>
 
-    <a href="<?= BASE_URL ?>/pages/cashier-pages/admin/reports.html"
+    <a href="<?= BASE_URL ?>/pages/cashier/cashier-reports.html"
        class="flex items-center gap-4 bg-white rounded-xl border border-slate-200 p-5 hover:border-violet-300 hover:shadow-sm transition">
         <div class="w-12 h-12 rounded-lg bg-violet-50 text-violet-600 flex items-center justify-center shrink-0">
             <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">

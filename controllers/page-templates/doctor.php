@@ -129,7 +129,7 @@ $awaitingDischargeConfirmation = array_values(array_filter(
             <h3 class="text-lg font-semibold text-slate-900">Assigned Patients</h3>
             <p class="text-xs text-slate-500 mt-0.5">Admissions assigned to you</p>
         </div>
-        <a href="<?= BASE_URL ?>/pages/doctor-pages/admin/patients.html" class="text-sm font-medium text-blue-600 hover:text-blue-700">View all →</a>
+        <a href="<?= BASE_URL ?>/pages/doctor/doctor-patients.html" class="text-sm font-medium text-blue-600 hover:text-blue-700">View all →</a>
     </div>
     <div class="overflow-x-auto">
         <table class="min-w-full text-sm">

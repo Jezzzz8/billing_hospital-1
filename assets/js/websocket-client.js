@@ -180,6 +180,8 @@
         } else if (eventName === 'admission.created' && userRole === 3) {
             page = 'nurse-room-assignments';
             if (admissionId) params.admission_id = admissionId;
+        } else if (eventName === 'admission.inpatient.requested' && userRole === 3) {
+            page = 'nurse-admissions';
         } else if (['admission.room.assigned', 'admission.room.transferred', 'doctor.assigned', 'doctor.removed'].includes(eventName)) {
             if (userRole === 3) {
                 page = 'nurse-room-assignments';
@@ -197,7 +199,7 @@
             page = userRole === 3
                 ? 'nurse-discharge-ready'
                 : document.body.dataset.doctorCareScope === 'ER'
-                    ? 'doctor-patients'
+                    ? 'doctor-discharge-ready'
                     : 'doctor-discharge-ready';
         } else if (['billing.charge.added', 'billing.charge.removed', 'billing.payment.added',
             'billing.payment.removed', 'billing.statement.created', 'billing.statement.updated'].includes(eventName)) {
@@ -284,7 +286,11 @@
 
     function pageAllowedForRole(page, role) {
         if (role === 2 && document.body.dataset.doctorCareScope === 'ER'
-            && ['doctor-consultations', 'doctor-discharge-ready'].includes(page)) {
+            && page === 'doctor-consultations') {
+            return false;
+        }
+        if (role === 2 && document.body.dataset.doctorCareScope !== 'ER'
+            && page === 'doctor-admission-requests') {
             return false;
         }
         const allowedPages = {
@@ -293,7 +299,7 @@
                 'specialization', 'diagnosis', 'charge-category', 'charge-item', 'building',
                 'floor-level', 'room-type', 'room', 'department', 'department-requests', 'admin-receipt'],
             2: ['doctor', 'doctor-patients', 'doctor-consultations', 'doctor-diagnosis-record',
-                'doctor-service-requests', 'doctor-discharge-ready'],
+                'doctor-service-requests', 'doctor-discharge-ready', 'doctor-admission-requests'],
             3: ['nurse', 'nurse-patient-search', 'nurse-patient-register', 'nurse-emergency-create',
                 'nurse-admission-create',
                 'nurse-admissions', 'nurse-fulfillment-receipts', 'nurse-medicine-intakes',

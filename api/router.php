@@ -98,6 +98,7 @@ $allowed = [
         'doctor-diagnosis-record',
         'doctor-service-requests',
         'doctor-discharge-ready',
+        'doctor-admission-requests',
     ],
     3 => [
         'nurse',
@@ -255,9 +256,14 @@ if ($roleId === 2) {
     $doctorCareScope = $doctorScopeStmt->fetchColumn() ?: null;
 }
 if ($roleId === 2 && $doctorCareScope === 'ER'
-    && in_array($page, ['doctor-consultations', 'doctor-discharge-ready'], true)) {
+    && $page === 'doctor-consultations') {
     http_response_code(403);
     echo 'Access denied. This page is only available to Admission Doctors.';
+    exit;
+}
+if ($roleId === 2 && $doctorCareScope !== 'ER' && $page === 'doctor-admission-requests') {
+    http_response_code(403);
+    echo 'Access denied. This page is only available to Emergency Doctors.';
     exit;
 }
 
